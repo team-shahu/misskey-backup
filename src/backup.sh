@@ -14,6 +14,16 @@ if [ $? -eq 0 ]; then
     # バックアップファイルを削除
     echo "Backup succeeded" >> /var/log/cron.log
     rm $BACKUP_FILE $COMPRESSED
+    # 成功通知
+    curl=`cat <<EOS
+    curl
+    --verbose
+    -X POST
+    ${DISCORD_WEBHOOK_URL}
+    -H 'Content-Type: application/json'
+    --data '{"content": "✅バックアップが完了しました。(${$COMPRESSED})}'
+    EOS`
+    eval ${curl}
 else
     # 失敗時
     echo "Backup failed" >> /var/log/cron.log
@@ -25,7 +35,7 @@ else
         -X POST
         ${DISCORD_WEBHOOK_URL}
         -H 'Content-Type: application/json'
-        --data '{"content": "バックアップに失敗しました。ログを確認してください。"}'
+        --data '{"content": "❌バックアップに失敗しました。ログを確認してください。"}'
         EOS`
         eval ${curl}
     fi
