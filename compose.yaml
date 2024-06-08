@@ -17,4 +17,4 @@ networks:
     external: true
 volumes:
   misskey-data:
-    external: true
+  
