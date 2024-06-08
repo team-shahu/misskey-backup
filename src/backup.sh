@@ -15,28 +15,12 @@ if [ $? -eq 0 ]; then
     echo "Backup succeeded" >> /var/log/cron.log
     rm $BACKUP_FILE $COMPRESSED
     # 成功通知
-    curl=`cat <<EOS
-    curl
-    --verbose
-    -X POST
-    ${DISCORD_WEBHOOK_URL}
-    -H 'Content-Type: application/json'
-    --data '{"content": "✅バックアップが完了しました。(${$COMPRESSED})}'
-    EOS`
-    eval ${curl}
+    curl -X POST -F content="✅バックアップが完了しました。(${COMPRESSED})" ${DISCORD_WEBHOOK_URL} &> /dev/null
 else
     # 失敗時
     echo "Backup failed" >> /var/log/cron.log
     # 通知設定の有無を確認
-    if [ -n "$ERROR_NOTIFICATION" ]; then
-        curl=`cat <<EOS
-        curl
-        --verbose
-        -X POST
-        ${DISCORD_WEBHOOK_URL}
-        -H 'Content-Type: application/json'
-        --data '{"content": "❌バックアップに失敗しました。ログを確認してください。"}'
-        EOS`
-        eval ${curl}
+    if [ -n "$NOTIFICATION" ]; then
+        curl -X POST -F content="❌バックアップに失敗しました。ログを確認してください。" ${DISCORD_WEBHOOK_URL} &> /dev/null
     fi
 fi
