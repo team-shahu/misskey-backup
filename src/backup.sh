@@ -7,7 +7,7 @@ pg_dump -h $POSTGRES_HOST -U $POSTGRES_USER -d $POSTGRES_DB > $BACKUP_FILE 2>> /
 
 7z a $COMPRESSED $BACKUP_FILE
 
-rclone copy $COMPRESSED backup:${R2_PREFIX}
+rclone copy --s3-upload-cutoff=5000M --multi-thread-cutoff 5000M $COMPRESSED backup:${R2_PREFIX}
 
 # 成功確認
 if [ $? -eq 0 ]; then
