@@ -1,0 +1,20 @@
+version: '3'
+
+services:
+  backup:
+    build: .
+    container_name: backup
+    restart: always
+    networks:
+      - misskey-postgres
+    env_file:
+      - ./config/.env
+    volumes:
+      - misskey-data:/misskey-data
+
+networks:
+  misskey-postgres:
+    external: true
+volumes:
+  misskey-data:
+    external: true
