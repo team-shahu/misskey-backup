@@ -15,7 +15,9 @@ if [ $? -eq 0 ]; then
     echo "Backup succeeded" >> /var/log/cron.log
     rm $BACKUP_FILE $COMPRESSED
     # 成功通知
-    curl -X POST -F content="✅バックアップが完了しました。(${COMPRESSED})" ${DISCORD_WEBHOOK_URL} &> /dev/null
+    if [ -n "$NOTIFICATION" ]; then
+        curl -X POST -F content="✅バックアップが完了しました。(${COMPRESSED})" ${DISCORD_WEBHOOK_URL} &> /dev/null
+    fi
 else
     # 失敗時
     echo "Backup failed" >> /var/log/cron.log
