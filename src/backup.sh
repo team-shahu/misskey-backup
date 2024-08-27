@@ -14,14 +14,50 @@ if [ $? -eq 0 ]; then
     echo "Backup succeeded" >> /var/log/cron.log
     # 成功通知
     if [ -n "$NOTIFICATION" ]; then
-        curl -X POST -F content="✅バックアップが完了しました。(${COMPRESSED})" ${DISCORD_WEBHOOK_URL} &> /dev/null
+        curl -H "Content-Type: application/json" \
+        -X POST \
+        -d '{
+                "embeds": [
+                    {
+                    "title": "✅バックアップが完了しました。",
+                    "description": "PostgreSQLのバックアップが正常に完了しました",
+                    "color": 5620992,
+                    "fields": [
+                        {
+                        "name": ":file_folder: 保存先",
+                        "value": "${COMPRESSED}",
+                        "inline":true
+                        }
+                    ]
+                    }
+                ]
+            }' \
+        ${DISCORD_WEBHOOK_URL} &> /dev/null
     fi
 else
     # 失敗時
     echo "Backup failed" >> /var/log/cron.log
     # 通知設定の有無を確認
     if [ -n "$NOTIFICATION" ]; then
-        curl -X POST -F content="❌バックアップに失敗しました。ログを確認してください。" ${DISCORD_WEBHOOK_URL} &> /dev/null
+        curl -H "Content-Type: application/json" \
+        -X POST \
+        -d '{
+                "embeds": [
+                    {
+                    "title": "❌バックアップに失敗しました。",
+                    "description": "PostgreSQLのバックアップが異常終了しました。ログを確認してください。",
+                    "color": 15548997,
+                    "fields": [
+                        {
+                        "name": ":file_folder: 保存先",
+                        "value": "${COMPRESSED}",
+                        "inline":true
+                        }
+                    ]
+                    }
+                ]
+            }' \
+        ${DISCORD_WEBHOOK_URL} &> /dev/null
     fi
 fi
 
