@@ -16,7 +16,8 @@ if [ $? -eq 0 ]; then
     if [ -n "$NOTIFICATION" ]; then
         curl -H "Content-Type: application/json" \
         -X POST \
-        -d '{
+        -d @- <<EOS
+        {
                 "embeds": [
                     {
                     "title": "✅バックアップが完了しました。",
@@ -31,8 +32,8 @@ if [ $? -eq 0 ]; then
                     ]
                     }
                 ]
-            }' \
-        ${DISCORD_WEBHOOK_URL} &> /dev/null
+            } 
+        EOS ${DISCORD_WEBHOOK_URL} &> /dev/null
     fi
 else
     # 失敗時
@@ -41,23 +42,24 @@ else
     if [ -n "$NOTIFICATION" ]; then
         curl -H "Content-Type: application/json" \
         -X POST \
-        -d '{
-                "embeds": [
+        -d @- <<EOS
+        {
+            "embeds": [
+                {
+                "title": "❌バックアップに失敗しました。",
+                "description": "PostgreSQLのバックアップが異常終了しました。ログを確認してください。",
+                "color": 15548997,
+                "fields": [
                     {
-                    "title": "❌バックアップに失敗しました。",
-                    "description": "PostgreSQLのバックアップが異常終了しました。ログを確認してください。",
-                    "color": 15548997,
-                    "fields": [
-                        {
-                        "name": ":file_folder: 保存先",
-                        "value": "${COMPRESSED}",
-                        "inline":true
-                        }
-                    ]
+                    "name": ":file_folder: 保存先",
+                    "value": "${COMPRESSED}",
+                    "inline":true
                     }
                 ]
-            }' \
-        ${DISCORD_WEBHOOK_URL} &> /dev/null
+                }
+            ]
+        }
+        EOS ${DISCORD_WEBHOOK_URL} &> /dev/null
     fi
 fi
 
