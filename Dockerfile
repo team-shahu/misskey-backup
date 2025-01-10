@@ -7,7 +7,7 @@ ARG RCLONE_CONFIG_BACKUP_BUCKET_ACL
 
 # install tools
 RUN apk update
-RUN apk add curl unzip p7zip zstd
+RUN apk add curl unzip zstd
 
 # rclone
 RUN curl https://rclone.org/install.sh | bash
