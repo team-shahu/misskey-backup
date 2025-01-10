@@ -1,11 +1,11 @@
 #!/bin/sh
 
 BACKUP_FILE="/misskey-data/backups/${POSTGRES_DB}_$(TZ='Asia/Tokyo' date +%Y-%m-%d_%H-%M).sql"
-COMPRESSED="${BACKUP_FILE}.7z"
+COMPRESSED="${BACKUP_FILE}.zst"
 
 pg_dump -h $POSTGRES_HOST -U $POSTGRES_USER -d $POSTGRES_DB > $BACKUP_FILE 2>> /var/log/cron.log
 
-7z a $COMPRESSED $BACKUP_FILE
+time zstd -f $COMPRESSED $BACKUP_FILE
 
 rclone copy --s3-upload-cutoff=5000M --multi-thread-cutoff 5000M $COMPRESSED backup:${R2_PREFIX}
 
@@ -25,7 +25,7 @@ if [ $? -eq 0 ]; then
                             "fields": [
                                 {
                                     "name": ":file_folder: 保存先",
-                                    "value": "'"${COMPRESSED}"'",
+                                    "value": "'"${COMPRESSED%/*}"'",
                                     "inline": true
                                 }
                             ]
@@ -47,13 +47,6 @@ else
                             "title": "❌バックアップに失敗しました。",
                             "description": "PostgreSQLのバックアップが異常終了しました。ログを確認してください。",
                             "color": 15548997,
-                            "fields": [
-                                {
-                                    "name": ":file_folder: 保存先",
-                                    "value": "'"${COMPRESSED}"'",
-                                    "inline": true
-                                }
-                            ]
                         }
                     ]
                   }' \
