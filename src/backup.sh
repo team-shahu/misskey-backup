@@ -25,7 +25,7 @@ if [ $? -eq 0 ]; then
                             "fields": [
                                 {
                                     "name": ":file_folder: 保存先",
-                                    "value": "'"${COMPRESSED%/*}"'",
+                                    "value": "'"${COMPRESSED##*/}"'",
                                     "inline": true
                                 }
                             ]
