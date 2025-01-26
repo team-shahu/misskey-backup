@@ -24,11 +24,11 @@ set -o nounset
 
 
     pg_dump -h $POSTGRES_HOST -U $POSTGRES_USER -d $POSTGRES_DB > $BACKUP_FILE 2>> /var/log/cron.log
-
+    
     zstd -f $BACKUP_FILE 2>> /var/log/cron.log
 
     # upload to Google Drive
-    GDRIVE_OUTPUT=$(/usr/local/bin/gdrive files upload --parent $GDRIVE_PARENT_ID "$BACKUP_FILE")
+    GDRIVE_OUTPUT=$(/usr/local/bin/gdrive files upload --parent $GDRIVE_PARENT_ID "$COMPRESSED")
     VIEW_URL=$(echo "$GDRIVE_OUTPUT" | grep "ViewUrl:" | awk '{print $2}')
 
     END_TIME=`date +%s`
@@ -36,7 +36,7 @@ set -o nounset
 
     echo "Backup succeeded" >> /var/log/cron.log
     # 成功通知
-    if [ -n "$NOTIFICATION" ]; then
+    if [ -n "${NOTIFICATION}" ]; then
         curl -H "Content-Type: application/json" \
              -X POST \
              -d '{
@@ -71,7 +71,7 @@ set -o nounset
     # 失敗時
     echo "Backup failed" >> /var/log/cron.log
     # 通知設定の有無を確認
-    if [ -n "$NOTIFICATION" ]; then
+    if [ -n "${NOTIFICATION}" ]; then
         curl -H "Content-Type: application/json" \
              -X POST \
              -d '{

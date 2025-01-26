@@ -20,7 +20,7 @@ set -o nounset
 
     echo "Backup succeeded" >> /var/log/cron.log
     # 成功通知
-    if [ -n "$NOTIFICATION" ]; then
+    if [ -n "${NOTIFICATION}" ]; then
         curl -H "Content-Type: application/json" \
              -X POST \
              -d '{
@@ -50,7 +50,7 @@ set -o nounset
     # 失敗時
     echo "Backup failed" >> /var/log/cron.log
     # 通知設定の有無を確認
-    if [ -n "$NOTIFICATION" ]; then
+    if [ -n "${NOTIFICATION}" ]; then
         curl -H "Content-Type: application/json" \
              -X POST \
              -d '{
