@@ -1,14 +1,13 @@
 #!/bin/sh
 START_TIME=`date +%s`
 
-if [ -n "${GOOGLE_DRIVE_BACKUP}" ]; then
+if [ -n "${¥GOOGLE_DRIVE_BACKUP}" ]; then
     ACCOUNT=$(gdrive account list)
     if [ -z "${ACCOUNT}" ]; then
         echo "No Google Drive account"
-        exit 1
+        gdrive account import /root/config/"${GDRIVE_ACCOUNT_FILE}"
     else
         echo "Google Drive account found"
-        gdrive account import /root/config/"${GDRIVE_ACCOUNT_FILE}"
     fi
 else
     echo "No Google Drive backup"
