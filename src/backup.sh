@@ -4,17 +4,20 @@ START_TIME=`date +%s`
 BACKUP_FILE="/misskey-data/backups/${POSTGRES_DB}_$(TZ='Asia/Tokyo' date +%Y-%m-%d_%H-%M).sql"
 COMPRESSED="${BACKUP_FILE}.zst"
 
-pg_dump -h $POSTGRES_HOST -U $POSTGRES_USER -d $POSTGRES_DB > $BACKUP_FILE 2>> /var/log/cron.log
+set -o errexit
+set -o pipefail
+set -o nounset
 
-zstd -f $BACKUP_FILE
+{
+    pg_dump -h $POSTGRES_HOST -U $POSTGRES_USER -d $POSTGRES_DB > $BACKUP_FILE 2>> /var/log/cron.log
 
-rclone copy --s3-upload-cutoff=5000M --multi-thread-cutoff 5000M $COMPRESSED backup:${R2_PREFIX}
+    zstd -f $BACKUP_FILE  2>> /var/log/cron.log
 
-END_TIME=`date +%s`
-TIME=$((END_TIME - START_TIME))
+    rclone copy --s3-upload-cutoff=5000M --multi-thread-cutoff 5000M $COMPRESSED backup:${R2_PREFIX} 2>> /var/log/cron.log
 
-# 成功確認
-if [ $? -eq 0 ]; then
+    END_TIME=`date +%s`
+    TIME=$((END_TIME - START_TIME))
+
     echo "Backup succeeded" >> /var/log/cron.log
     # 成功通知
     if [ -n "$NOTIFICATION" ]; then
@@ -23,7 +26,7 @@ if [ $? -eq 0 ]; then
              -d '{
                     "embeds": [
                         {
-                            "title": "✅バックアップが完了しました。",
+                            "title": "✅ バックアップが完了しました。",
                             "description": "PostgreSQLのバックアップが正常に完了しました",
                             "color": 5620992,
                             "fields": [
@@ -43,7 +46,7 @@ if [ $? -eq 0 ]; then
                   }' \
              "${DISCORD_WEBHOOK_URL}" &> /dev/null
     fi
-else
+} || {
     # 失敗時
     echo "Backup failed" >> /var/log/cron.log
     # 通知設定の有無を確認
@@ -53,7 +56,7 @@ else
              -d '{
                     "embeds": [
                         {
-                            "title": "❌バックアップに失敗しました。",
+                            "title": "❌ バックアップに失敗しました。",
                             "description": "PostgreSQLのバックアップが異常終了しました。ログを確認してください。",
                             "color": 15548997,
                         },
@@ -66,7 +69,7 @@ else
                   }' \
              "${DISCORD_WEBHOOK_URL}" &> /dev/null
     fi
-fi
+}
 
 # バックアップファイルを削除
 rm -rf $BACKUP_FILE

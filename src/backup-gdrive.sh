@@ -1,35 +1,39 @@
 #!/bin/sh
 START_TIME=`date +%s`
 
-if [ -n "${GOOGLE_DRIVE_BACKUP}" ]; then
-    ACCOUNT=$(gdrive account list)
-    if [ -z "${ACCOUNT}" ]; then
-        echo "No Google Drive account"
-        gdrive account import /root/"${GDRIVE_ACCOUNT_FILE}"
-    else
-        echo "Google Drive account found"
-    fi
-else
-    echo "No Google Drive backup"
-    exit 0
-fi
-
 BACKUP_FILE="/misskey-data/backups/${POSTGRES_DB}_$(TZ='Asia/Tokyo' date +%Y-%m-%d_%H-%M).sql"
 COMPRESSED="${BACKUP_FILE}.zst"
 
-pg_dump -h $POSTGRES_HOST -U $POSTGRES_USER -d $POSTGRES_DB > $BACKUP_FILE 2>> /var/log/cron.log
+set -o errexit
+set -o pipefail
+set -o nounset
 
-zstd -f $BACKUP_FILE
+{
+    if [ -n "${GOOGLE_DRIVE_BACKUP}" ]; then
+        ACCOUNT=$(gdrive account list)
+        if [ -z "${ACCOUNT}" ]; then
+            echo "No Google Drive account"
+            gdrive account import /root/"${GDRIVE_ACCOUNT_FILE}"
+        else
+            echo "Google Drive account found"
+        fi
+    else
+        echo "No Google Drive backup"
+        exit 0
+    fi
 
-# upload to Google Drive
-GDRIVE_OUTPUT=$(/usr/local/bin/gdrive files upload --parent $GDRIVE_PARENT_ID "$BACKUP_FILE")
-VIEW_URL=$(echo "$GDRIVE_OUTPUT" | grep "ViewUrl:" | awk '{print $2}')
 
-END_TIME=`date +%s`
-TIME=$((END_TIME - START_TIME))
+    pg_dump -h $POSTGRES_HOST -U $POSTGRES_USER -d $POSTGRES_DB > $BACKUP_FILE 2>> /var/log/cron.log
 
-# 成功確認
-if [ $? -eq 0 ]; then
+    zstd -f $BACKUP_FILE 2>> /var/log/cron.log
+
+    # upload to Google Drive
+    GDRIVE_OUTPUT=$(/usr/local/bin/gdrive files upload --parent $GDRIVE_PARENT_ID "$BACKUP_FILE")
+    VIEW_URL=$(echo "$GDRIVE_OUTPUT" | grep "ViewUrl:" | awk '{print $2}')
+
+    END_TIME=`date +%s`
+    TIME=$((END_TIME - START_TIME))
+
     echo "Backup succeeded" >> /var/log/cron.log
     # 成功通知
     if [ -n "$NOTIFICATION" ]; then
@@ -63,7 +67,7 @@ if [ $? -eq 0 ]; then
                   }' \
              "${DISCORD_WEBHOOK_URL}" &> /dev/null
     fi
-else
+} || {
     # 失敗時
     echo "Backup failed" >> /var/log/cron.log
     # 通知設定の有無を確認
@@ -73,7 +77,7 @@ else
              -d '{
                     "embeds": [
                         {
-                            "title": "❌バックアップに失敗しました。",
+                            "title": "❌[Google Drive] バックアップに失敗しました。",
                             "description": "PostgreSQLのバックアップが異常終了しました。ログを確認してください。",
                             "color": 15548997,
                         },
@@ -86,7 +90,7 @@ else
                   }' \
              "${DISCORD_WEBHOOK_URL}" &> /dev/null
     fi
-fi
+}
 
 # バックアップファイルを削除
 rm -rf $BACKUP_FILE
