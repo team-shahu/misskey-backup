@@ -1,7 +1,7 @@
 #!/bin/sh
 START_TIME=`date +%s`
 
-if [ -n "${¥GOOGLE_DRIVE_BACKUP}" ]; then
+if [ -n "${GOOGLE_DRIVE_BACKUP}" ]; then
     ACCOUNT=$(gdrive account list)
     if [ -z "${ACCOUNT}" ]; then
         echo "No Google Drive account"
