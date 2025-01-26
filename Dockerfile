@@ -23,11 +23,6 @@ RUN wget https://github.com/glotlabs/gdrive/releases/download/3.9.1/gdrive_linux
 RUN tar -xzf gdrive_linux-x64.tar.gz
 RUN mv gdrive /usr/local/bin/
 RUN chmod +x /usr/local/bin/gdrive
-RUN if [ -n "${GOOGLE_DRIVE_BACKUP}" ]; then \
-        gdrive account import /root/config/"${GDRIVE_ACCOUNT_FILE}" \
-    else \
-        echo "No Google Drive backup" \
-    fi
 
 
 COPY <<EOF /root/.config/rclone/rclone.conf

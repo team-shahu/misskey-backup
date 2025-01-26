@@ -1,17 +1,26 @@
 #!/bin/sh
 START_TIME=`date +%s`
 
+if [ -n "${GOOGLE_DRIVE_BACKUP}" ]; then
+    ACCOUNT=$(gdrive account list)
+    if [ -z "${ACCOUNT}" ]; then
+        echo "No Google Drive account"
+        exit 1
+    else
+        echo "Google Drive account found"
+        gdrive account import /root/config/"${GDRIVE_ACCOUNT_FILE}"
+    fi
+else
+    echo "No Google Drive backup"
+    exit 0
+fi
+
 BACKUP_FILE="/misskey-data/backups/${POSTGRES_DB}_$(TZ='Asia/Tokyo' date +%Y-%m-%d_%H-%M).sql"
 COMPRESSED="${BACKUP_FILE}.zst"
 
 pg_dump -h $POSTGRES_HOST -U $POSTGRES_USER -d $POSTGRES_DB > $BACKUP_FILE 2>> /var/log/cron.log
 
 zstd -f $BACKUP_FILE
-
-# get the parent folder ID
-FILE_ID="$(/usr/local/bin/gdrive --service-account "${SA}" -c . \
-  list -q "'""${PARENT_ID}""' in parents" | \
-    sed "1d" | grep "${DEST_FILE_NAME}" | head -n 1 | cut -d" " -f1)"
 
 # upload to Google Drive
 GDRIVE_OUTPUT=$(/usr/local/bin/gdrive files upload --parent $GDRIVE_PARENT_ID "$BACKUP_FILE")
