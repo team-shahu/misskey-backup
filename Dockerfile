@@ -4,13 +4,31 @@ ARG RCLONE_CONFIG_BACKUP_ENDPOINT
 ARG RCLONE_CONFIG_BACKUP_ACCESS_KEY_ID
 ARG RCLONE_CONFIG_BACKUP_SECRET_ACCESS_KEY
 ARG RCLONE_CONFIG_BACKUP_BUCKET_ACL
+ARG GOOGLE_DRIVE_BACKUP
+ARG GDRIVE_ACCOUNT_FILE
+ARG GDRIVE_PARENT_ID
 
 # install tools
 RUN apk update
-RUN apk add curl unzip zstd
+RUN apk add curl unzip zstd wget
+
 
 # rclone
 RUN curl https://rclone.org/install.sh | bash
+
+
+# gdrive
+COPY ./config/ /root/
+RUN wget https://github.com/glotlabs/gdrive/releases/download/3.9.1/gdrive_linux-x64.tar.gz
+RUN tar -xzf gdrive_linux-x64.tar.gz
+RUN mv gdrive /usr/local/bin/
+RUN chmod +x /usr/local/bin/gdrive
+RUN if [ -n "${GOOGLE_DRIVE_BACKUP}" ]; then \
+        gdrive account import /root/config/"${GDRIVE_ACCOUNT_FILE}" \
+    else \
+        echo "No Google Drive backup" \
+    fi
+
 
 COPY <<EOF /root/.config/rclone/rclone.conf
 [backup]

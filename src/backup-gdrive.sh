@@ -1,0 +1,85 @@
+#!/bin/sh
+START_TIME=`date +%s`
+
+BACKUP_FILE="/misskey-data/backups/${POSTGRES_DB}_$(TZ='Asia/Tokyo' date +%Y-%m-%d_%H-%M).sql"
+COMPRESSED="${BACKUP_FILE}.zst"
+
+pg_dump -h $POSTGRES_HOST -U $POSTGRES_USER -d $POSTGRES_DB > $BACKUP_FILE 2>> /var/log/cron.log
+
+zstd -f $BACKUP_FILE
+
+# get the parent folder ID
+FILE_ID="$(/usr/local/bin/gdrive --service-account "${SA}" -c . \
+  list -q "'""${PARENT_ID}""' in parents" | \
+    sed "1d" | grep "${DEST_FILE_NAME}" | head -n 1 | cut -d" " -f1)"
+
+# upload to Google Drive
+GDRIVE_OUTPUT=$(/usr/local/bin/gdrive files upload --parent $GDRIVE_PARENT_ID "$BACKUP_FILE")
+VIEW_URL=$(echo "$GDRIVE_OUTPUT" | grep "ViewUrl:" | awk '{print $2}')
+
+END_TIME=`date +%s`
+TIME=$((END_TIME - START_TIME))
+
+# 成功確認
+if [ $? -eq 0 ]; then
+    echo "Backup succeeded" >> /var/log/cron.log
+    # 成功通知
+    if [ -n "$NOTIFICATION" ]; then
+        curl -H "Content-Type: application/json" \
+             -X POST \
+             -d '{
+                    "embeds": [
+                        {
+                            "title": "✅[Google Drive] バックアップが完了しました。",
+                            "description": "PostgreSQLのバックアップが正常に完了しました",
+                            "color": 5620992,
+                            "fields": [
+                                {
+                                    "name": ":file_folder: 保存先",
+                                    "value": "'"${COMPRESSED##*/}"'",
+                                    "inline": true
+                                },
+                                {
+                                    "name": ":link: ダウンロードURL",
+                                    "value": "'"${VIEW_URL}"'",
+                                    "inline": true
+                                }
+                                {
+                                    "name": ":timer: 実行時間",
+                                    "value": "'"${TIME}"'s",
+                                    "inline": true
+                                }
+                            ]
+                        }
+                    ]
+                  }' \
+             "${DISCORD_WEBHOOK_URL}" &> /dev/null
+    fi
+else
+    # 失敗時
+    echo "Backup failed" >> /var/log/cron.log
+    # 通知設定の有無を確認
+    if [ -n "$NOTIFICATION" ]; then
+        curl -H "Content-Type: application/json" \
+             -X POST \
+             -d '{
+                    "embeds": [
+                        {
+                            "title": "❌バックアップに失敗しました。",
+                            "description": "PostgreSQLのバックアップが異常終了しました。ログを確認してください。",
+                            "color": 15548997,
+                        },
+                        {
+                            "name": ":timer: 実行時間",
+                            "value": "'"${TIME}"'s",
+                            "inline": true
+                        }
+                    ]
+                  }' \
+             "${DISCORD_WEBHOOK_URL}" &> /dev/null
+    fi
+fi
+
+# バックアップファイルを削除
+rm -rf $BACKUP_FILE
+rm -rf $COMPRESSED
