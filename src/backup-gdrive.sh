@@ -55,7 +55,7 @@ set -o nounset
                                     "name": ":link: ダウンロードURL",
                                     "value": "'"${VIEW_URL}"'",
                                     "inline": true
-                                }
+                                },
                                 {
                                     "name": ":timer: 実行時間",
                                     "value": "'"${TIME}"'s",
