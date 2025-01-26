@@ -38,7 +38,8 @@ EOF
 
 # backup script
 COPY ./src/backup.sh /root/
-RUN chmod +x /root/backup.sh
+COPY ./src/backup-gdrive.sh /root/
+RUN chmod +x /root/backup.sh /root/backup-gdrive.sh
 
 RUN mkdir -p /misskey-data/backups
 
