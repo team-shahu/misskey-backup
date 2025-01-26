@@ -5,7 +5,7 @@ if [ -n "${GOOGLE_DRIVE_BACKUP}" ]; then
     ACCOUNT=$(gdrive account list)
     if [ -z "${ACCOUNT}" ]; then
         echo "No Google Drive account"
-        gdrive account import /root/config/"${GDRIVE_ACCOUNT_FILE}"
+        gdrive account import /root/"${GDRIVE_ACCOUNT_FILE}"
     else
         echo "Google Drive account found"
     fi
