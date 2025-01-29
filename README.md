@@ -16,3 +16,9 @@ postgreSQLのバックアップをよしなに取るためのスクリプト
     7. [REMOTE] `./config/.env`の`GOOGLE_DRIVE_BACKUP`を`true`に変更
     8. [REMOTE] `./config/crontab`を編集。指定の場所のコメントアウトを外す。
 6. `docker compose up -d --build`
+
+> [!NOTE]
+> ネットワークがない旨のエラーが発生することがあります。以下のコマンドを実行し、ネットワークを作成後、再度`docker compose up -d --build`を実行してください。
+> ```bash
+> docker network create misskey-backup_default
+> ```
