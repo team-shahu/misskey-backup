@@ -9,11 +9,24 @@ set -o pipefail
 set -o nounset
 
 {
+    # PostgreSQLのバックアップ
     pg_dump -h $POSTGRES_HOST -U $POSTGRES_USER -d $POSTGRES_DB > $BACKUP_FILE
 
-    zstd -f $BACKUP_FILE
+    # ファイルが存在していれば圧縮
+    if [ -f $BACKUP_FILE ]; then
+        zstd -f $BACKUP_FILE
+    else
+        echo "Backup file not found"
+        exit 1
+    fi
 
-    rclone copy --s3-upload-cutoff=5000M --multi-thread-cutoff 5000M $COMPRESSED backup:${R2_PREFIX}
+    # ファイルが存在していればアップロード
+    if [ -f $COMPRESSED ]; then
+        rclone copy --s3-upload-cutoff=5000M --multi-thread-cutoff 5000M $COMPRESSED backup:${R2_PREFIX}
+    else
+        echo "Compressed file not found"
+        exit 1
+    fi
 
     END_TIME=`date +%s`
     TIME=$((END_TIME - START_TIME))

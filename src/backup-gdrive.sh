@@ -9,6 +9,7 @@ set -o pipefail
 set -o nounset
 
 {
+    # Google Driveのバックアップ設定があるか確認
     if [ -n "${GOOGLE_DRIVE_BACKUP}" ]; then
         ACCOUNT=$(gdrive account list)
         if [ -z "${ACCOUNT}" ]; then
@@ -22,14 +23,24 @@ set -o nounset
         exit 0
     fi
 
-
+    # PostgreSQLのバックアップ
     pg_dump -h $POSTGRES_HOST -U $POSTGRES_USER -d $POSTGRES_DB > $BACKUP_FILE
-    
-    zstd -f $BACKUP_FILE
+    # ファイルが存在していれば圧縮
+    if [ -f $BACKUP_FILE ]; then
+        zstd -f $BACKUP_FILE
+    else
+        echo "Backup file not found"
+        exit 1
+    fi
 
-    # upload to Google Drive
-    GDRIVE_OUTPUT=$(/usr/local/bin/gdrive files upload --parent $GDRIVE_PARENT_ID "$COMPRESSED")
-    VIEW_URL=$(echo "$GDRIVE_OUTPUT" | grep "ViewUrl:" | awk '{print $2}')
+    # ファイルが存在していればアップロード
+    if [ -f $COMPRESSED ]; then
+        GDRIVE_OUTPUT=$(/usr/local/bin/gdrive files upload --parent $GDRIVE_PARENT_ID "$COMPRESSED")
+        VIEW_URL=$(echo "$GDRIVE_OUTPUT" | grep "ViewUrl:" | awk '{print $2}')
+    else
+        echo "Compressed file not found"
+        exit 1
+    fi
 
     END_TIME=`date +%s`
     TIME=$((END_TIME - START_TIME))
