@@ -9,16 +9,16 @@ set -o pipefail
 set -o nounset
 
 {
-    pg_dump -h $POSTGRES_HOST -U $POSTGRES_USER -d $POSTGRES_DB > $BACKUP_FILE 2>> /var/log/cron.log
+    pg_dump -h $POSTGRES_HOST -U $POSTGRES_USER -d $POSTGRES_DB > $BACKUP_FILE
 
-    zstd -f $BACKUP_FILE  2>> /var/log/cron.log
+    zstd -f $BACKUP_FILE
 
-    rclone copy --s3-upload-cutoff=5000M --multi-thread-cutoff 5000M $COMPRESSED backup:${R2_PREFIX} 2>> /var/log/cron.log
+    rclone copy --s3-upload-cutoff=5000M --multi-thread-cutoff 5000M $COMPRESSED backup:${R2_PREFIX}
 
     END_TIME=`date +%s`
     TIME=$((END_TIME - START_TIME))
 
-    echo "Backup succeeded" >> /var/log/cron.log
+    echo "Backup succeeded"
     # 成功通知
     if [ -n "${NOTIFICATION}" ]; then
         curl -H "Content-Type: application/json" \
@@ -44,11 +44,11 @@ set -o nounset
                         }
                     ]
                   }' \
-             "${DISCORD_WEBHOOK_URL}" &> /dev/null
+             "${DISCORD_WEBHOOK_URL}"
     fi
 } || {
     # 失敗時
-    echo "Backup failed" >> /var/log/cron.log
+    echo "Backup failed"
     # 通知設定の有無を確認
     if [ -n "${NOTIFICATION}" ]; then
         curl -H "Content-Type: application/json" \
@@ -67,7 +67,7 @@ set -o nounset
                         }
                     ]
                   }' \
-             "${DISCORD_WEBHOOK_URL}" &> /dev/null
+             "${DISCORD_WEBHOOK_URL}"
     fi
 }
 
