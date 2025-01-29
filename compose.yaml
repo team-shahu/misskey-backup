@@ -3,6 +3,8 @@ services:
     build: .
     container_name: backup
     restart: always
+    environment:
+      TZ: Asia/Tokyo
     networks:
       - misskey-postgres
     env_file:

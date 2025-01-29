@@ -8,6 +8,9 @@ ARG GOOGLE_DRIVE_BACKUP
 ARG GDRIVE_ACCOUNT_FILE
 ARG GDRIVE_PARENT_ID
 
+# set timezone
+RUN ln -sf /usr/share/zoneinfo/Asia/Tokyo /etc/localtime
+
 # install tools
 RUN apk update
 RUN apk add curl unzip zstd wget
