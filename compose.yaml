@@ -11,6 +11,14 @@ services:
       - ./config/.env
     volumes:
       - misskey-data:/misskey-data
+    logging:
+      options:
+        max-size: 5m
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: '1g'
 
 networks:
   misskey-postgres:

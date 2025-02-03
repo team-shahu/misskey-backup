@@ -1,4 +1,4 @@
-FROM postgres:16-alpine
+FROM debian:trixie-slim
 
 ARG RCLONE_CONFIG_BACKUP_ENDPOINT
 ARG RCLONE_CONFIG_BACKUP_ACCESS_KEY_ID
@@ -8,13 +8,8 @@ ARG GOOGLE_DRIVE_BACKUP
 ARG GDRIVE_ACCOUNT_FILE
 ARG GDRIVE_PARENT_ID
 
-# set timezone
-RUN ln -sf /usr/share/zoneinfo/Asia/Tokyo /etc/localtime
-
 # install tools
-RUN apk update
-RUN apk add curl unzip zstd wget
-
+RUN apt-get update && apt-get install curl unzip zstd wget cron postgresql -y
 
 # rclone
 RUN curl https://rclone.org/install.sh | bash
@@ -22,12 +17,12 @@ RUN curl https://rclone.org/install.sh | bash
 
 # gdrive
 COPY ./config/ /root/
-RUN wget https://github.com/glotlabs/gdrive/releases/download/3.9.1/gdrive_linux-x64.tar.gz
-RUN tar -xzf gdrive_linux-x64.tar.gz
-RUN mv gdrive /usr/local/bin/
-RUN chmod +x /usr/local/bin/gdrive
+RUN wget https://github.com/glotlabs/gdrive/releases/download/3.9.1/gdrive_linux-x64.tar.gz \
+    && tar -xzf gdrive_linux-x64.tar.gz \
+    && mv gdrive /usr/local/bin/ \
+    && chmod +x /usr/local/bin/gdrive 
 
-
+RUN mkdir /tools
 COPY <<EOF /root/.config/rclone/rclone.conf
 [backup]
 type = s3
@@ -40,15 +35,12 @@ bucket_acl = ${RCLONE_CONFIG_BACKUP_BUCKET_ACL}
 EOF
 
 # backup script
-COPY ./src/backup.sh /root/
-COPY ./src/backup-gdrive.sh /root/
-RUN chmod +x /root/backup.sh /root/backup-gdrive.sh
-
-RUN mkdir -p /misskey-data/backups
+COPY ./src/backup.sh /tools/
+COPY ./src/backup-gdrive.sh /tools/
+RUN chmod +x /tools/backup.sh /tools/backup-gdrive.sh && mkdir -p /misskey-data/backups
 
 # crontab
-RUN mkdir -p /var/spool/cron/crontabs
 COPY ./config/crontab /var/spool/cron/crontabs/root
-RUN chmod 0644 /var/spool/cron/crontabs/root
+#RUN chmod 0644 /var/spool/cron/crontabs/root
 
-CMD sh -c "crond -l 0 -f"
+CMD ["cron", "-l", "0", "-f"]
