@@ -1,7 +1,7 @@
 #!/bin/sh
 START_TIME=`date +%s`
 
-BACKUP_FILE="/misskey-data/backups/${POSTGRES_DB}_$(TZ='Asia/Tokyo' date +%Y-%m-%d_%H-%M).sql"
+BACKUP_FILE="/misskey-data/backups/${POSTGRES_DB}_$(TZ='Asia/Tokyo' date +%Y-%m-%d_%H-%M).dump"
 COMPRESSED="${BACKUP_FILE}.zst"
 
 set -o errexit
@@ -24,7 +24,7 @@ set -o nounset
     fi
 
     # PostgreSQLのバックアップ
-    pg_dump -h $POSTGRES_HOST -U $POSTGRES_USER -d $POSTGRES_DB > $BACKUP_FILE
+    pg_dump -Fc -h $POSTGRES_HOST -U $POSTGRES_USER -d $POSTGRES_DB > $BACKUP_FILE
     # ファイルが存在していれば圧縮
     if [ -f $BACKUP_FILE ]; then
         zstd -f $BACKUP_FILE
