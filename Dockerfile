@@ -40,9 +40,6 @@ COPY ./src/backup-gdrive.sh /tools/
 RUN chmod +x /tools/backup.sh /tools/backup-gdrive.sh && mkdir -p /misskey-data/backups
 
 # crontab
-COPY ./config/crontab /var/spool/crontab/root
-RUN chmod 0644 /var/spool/crontab/root
-RUN crontab /var/spool/crontab/root
-RUN service cron start
-
-CMD ["cron", "-l", "0", "-f"]
+COPY ./config/crontab /etc/cron.d/backup
+RUN chmod 755 /etc/cron.d/backup
+RUN crontab /etc/cron.d/backup

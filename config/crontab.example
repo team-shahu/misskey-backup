@@ -2,6 +2,6 @@
 #  misskey backup 
 #  このファイルを./config/crontabとしてコピーして編集してください
 # =============================================
-0 */12 * * * . /tools/backup.sh
+0 5,17 * * * . /tools/backup.sh
 # Google Driveへのバックアップを併用する場合、以下のコメントを解除してください。
-#0 * * * * . /tools/backup-gdrive.sh
+#0 5,17 * * * . /tools/backup-gdrive.sh

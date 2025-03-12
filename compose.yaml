@@ -7,8 +7,8 @@ services:
       TZ: Asia/Tokyo
     networks:
       - misskey-postgres
-    env_file:
-      - ./config/.env
+    #env_file:
+    #  - ./config/.env
     volumes:
       - misskey-data:/misskey-data
     logging:
@@ -19,7 +19,12 @@ services:
         limits:
           cpus: '1'
           memory: '1g'
-
+    command: ["cron", "-f"]
+    healthcheck:
+      test: ["CMD", "cron", "status"]
+      interval: 1m
+      timeout: 10s
+      retries: 3
 networks:
   misskey-postgres:
     external: true
