@@ -9,7 +9,7 @@ ARG GDRIVE_ACCOUNT_FILE
 ARG GDRIVE_PARENT_ID
 
 # install tools
-RUN apt-get update && apt-get install curl unzip zstd wget cron postgresql -y
+RUN apt-get update && apt-get install curl unzip zstd wget postgresql -y && apt-get install -y cron --no-install-recommends
 
 # rclone
 RUN curl https://rclone.org/install.sh | bash
@@ -40,6 +40,7 @@ COPY ./src/backup-gdrive.sh /tools/
 RUN chmod +x /tools/backup.sh /tools/backup-gdrive.sh && mkdir -p /misskey-data/backups
 
 # crontab
-COPY ./config/crontab /etc/cron.d/backup
-RUN chmod 755 /etc/cron.d/backup
+RUN /etc/init.d/cron start
+COPY ./config/crontab /etc/cron.d/crontab
+RUN chmod 0644 /etc/cron.d/crontab
 RUN crontab /etc/cron.d/backup
