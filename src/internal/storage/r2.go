@@ -8,6 +8,7 @@ import (
 	"math/rand"
 	"os"
 	"path"
+	"sync"
 	"time"
 
 	"misskey-backup/internal/config"
@@ -296,67 +297,101 @@ func (r *R2Storage) uploadMultipart(ctx context.Context, localPath, fullRemotePa
 	// チャンクサイズを設定から取得（MB単位をバイト単位に変換）
 	chunkSizeMB := r.config.ChunkSize
 	if chunkSizeMB == 0 {
-		chunkSizeMB = 50 // デフォルト値
+		chunkSizeMB = 10 // デフォルト値
 	}
 	chunkSize := int64(chunkSizeMB) * 1024 * 1024
 	numParts := int((fileSize + chunkSize - 1) / chunkSize)
 
 	logrus.Infof("Using chunk size: %d MB (%d parts)", chunkSizeMB, numParts)
 
-	var completedParts []types.CompletedPart
+	// 各パートを並列でアップロード
+	var wg sync.WaitGroup
+	completedParts := make([]types.CompletedPart, numParts)
+	errors := make(chan error, numParts)
 
-	file, err := os.Open(localPath)
-	if err != nil {
-		return "", fmt.Errorf("failed to open file: %w", err)
+	// 並列度を制限（同時にアップロードするパート数）
+	maxConcurrency := r.config.MaxConcurrency
+	if maxConcurrency == 0 {
+		maxConcurrency = 5 // デフォルト値
 	}
-	defer file.Close()
+	semaphore := make(chan struct{}, maxConcurrency)
 
-	// 各パートをアップロード
+	logrus.Infof("Starting parallel upload with %d concurrent parts", maxConcurrency)
+
 	for partNumber := 1; partNumber <= numParts; partNumber++ {
-		logrus.Infof("Uploading part %d/%d", partNumber, numParts)
+		wg.Add(1)
+		go func(partNum int) {
+			defer wg.Done()
 
-		// パートのサイズを計算
-		start := int64(partNumber-1) * chunkSize
-		end := start + chunkSize
-		if end > fileSize {
-			end = fileSize
-		}
-		partSize := end - start
+			// セマフォで並列度を制限
+			semaphore <- struct{}{}
+			defer func() { <-semaphore }()
 
-		// ファイルの位置を設定
-		_, err = file.Seek(start, 0)
-		if err != nil {
-			return "", fmt.Errorf("failed to seek file: %w", err)
-		}
+			logrus.Infof("Uploading part %d/%d", partNum, numParts)
 
-		// パートをアップロード
-		partNumberInt32 := int32(partNumber)
-		partSizeInt64 := partSize
+			// パートのサイズを計算
+			start := int64(partNum-1) * chunkSize
+			end := start + chunkSize
+			if end > fileSize {
+				end = fileSize
+			}
+			partSize := end - start
 
-		uploadPartResp, err := r.client.UploadPart(uploadCtx, &s3.UploadPartInput{
-			Bucket:        aws.String(r.bucketName),
-			Key:           aws.String(fullRemotePath),
-			PartNumber:    &partNumberInt32,
-			UploadId:      uploadID,
-			Body:          io.LimitReader(file, partSize),
-			ContentLength: &partSizeInt64,
-		})
-		if err != nil {
-			// マルチパートアップロードを中止
-			r.client.AbortMultipartUpload(uploadCtx, &s3.AbortMultipartUploadInput{
-				Bucket:   aws.String(r.bucketName),
-				Key:      aws.String(fullRemotePath),
-				UploadId: uploadID,
+			// ファイルを開く（各ゴルーチンで独立したファイルハンドル）
+			file, err := os.Open(localPath)
+			if err != nil {
+				errors <- fmt.Errorf("failed to open file for part %d: %w", partNum, err)
+				return
+			}
+			defer file.Close()
+
+			// ファイルの位置を設定
+			_, err = file.Seek(start, 0)
+			if err != nil {
+				errors <- fmt.Errorf("failed to seek file for part %d: %w", partNum, err)
+				return
+			}
+
+			// パートをアップロード
+			partNumberInt32 := int32(partNum)
+			partSizeInt64 := partSize
+
+			uploadPartResp, err := r.client.UploadPart(uploadCtx, &s3.UploadPartInput{
+				Bucket:        aws.String(r.bucketName),
+				Key:           aws.String(fullRemotePath),
+				PartNumber:    &partNumberInt32,
+				UploadId:      uploadID,
+				Body:          io.LimitReader(file, partSize),
+				ContentLength: &partSizeInt64,
 			})
-			return "", fmt.Errorf("failed to upload part %d: %w", partNumber, err)
-		}
+			if err != nil {
+				errors <- fmt.Errorf("failed to upload part %d: %w", partNum, err)
+				return
+			}
 
-		completedParts = append(completedParts, types.CompletedPart{
-			ETag:       uploadPartResp.ETag,
-			PartNumber: &partNumberInt32,
+			// 完了したパートを保存
+			completedParts[partNum-1] = types.CompletedPart{
+				ETag:       uploadPartResp.ETag,
+				PartNumber: &partNumberInt32,
+			}
+
+			logrus.Infof("Completed part %d/%d", partNum, numParts)
+		}(partNumber)
+	}
+
+	// すべてのゴルーチンの完了を待つ
+	wg.Wait()
+	close(errors)
+
+	// エラーチェック
+	for err := range errors {
+		// マルチパートアップロードを中止
+		r.client.AbortMultipartUpload(uploadCtx, &s3.AbortMultipartUploadInput{
+			Bucket:   aws.String(r.bucketName),
+			Key:      aws.String(fullRemotePath),
+			UploadId: uploadID,
 		})
-
-		logrus.Infof("Completed part %d/%d", partNumber, numParts)
+		return "", fmt.Errorf("multipart upload failed: %w", err)
 	}
 
 	// マルチパートアップロードを完了

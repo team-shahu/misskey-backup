@@ -34,8 +34,9 @@ type Config struct {
 	RetryMaxDelay  int // 秒単位
 
 	// アップロード設定
-	UploadTimeout int // 分単位
-	ChunkSize     int // MB単位
+	UploadTimeout  int // 分単位
+	ChunkSize      int // MB単位
+	MaxConcurrency int // 並列アップロード数
 
 	// デバッグ設定
 	Debug bool
@@ -74,7 +75,8 @@ func Load() (*Config, error) {
 		RetryBaseDelay:    getEnvAsInt("RETRY_BASE_DELAY", 1),
 		RetryMaxDelay:     getEnvAsInt("RETRY_MAX_DELAY", 30),
 		UploadTimeout:     getEnvAsInt("UPLOAD_TIMEOUT", 60),
-		ChunkSize:         getEnvAsInt("CHUNK_SIZE", 50),
+		ChunkSize:         getEnvAsInt("CHUNK_SIZE", 10),
+		MaxConcurrency:    getEnvAsInt("MAX_CONCURRENCY", 5),
 		Debug:             getEnvAsBool("DEBUG", false),
 		Notification:      getEnvAsBool("NOTIFICATION", false),
 		DiscordWebhookURL: getEnv("DISCORD_WEBHOOK_URL", ""),
