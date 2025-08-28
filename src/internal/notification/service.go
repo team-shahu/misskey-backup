@@ -46,6 +46,21 @@ func NewService(cfg *config.Config) *Service {
 	}
 }
 
+// formatDuration formats a duration as "h:m:s" or "m:s" or "s"
+func formatDuration(d time.Duration) string {
+	hours := int(d.Hours())
+	minutes := int(d.Minutes()) % 60
+	seconds := int(d.Seconds()) % 60
+
+	if hours > 0 {
+		return fmt.Sprintf("%dh %dm %ds", hours, minutes, seconds)
+	} else if minutes > 0 {
+		return fmt.Sprintf("%dm %ds", minutes, seconds)
+	} else {
+		return fmt.Sprintf("%ds", seconds)
+	}
+}
+
 func (s *Service) NotifyBackupSuccess(ctx context.Context, result *backup.BackupResult) error {
 	if !s.config.Notification || s.config.DiscordWebhookURL == "" {
 		return nil
@@ -64,7 +79,7 @@ func (s *Service) NotifyBackupSuccess(ctx context.Context, result *backup.Backup
 			},
 			{
 				Name:   ":timer: 実行時間",
-				Value:  fmt.Sprintf("%.1fs", result.Duration.Seconds()),
+				Value:  formatDuration(result.Duration),
 				Inline: true,
 			},
 		},
@@ -103,7 +118,7 @@ func (s *Service) NotifyBackupFailure(ctx context.Context, err error, duration t
 		Fields: []DiscordEmbedField{
 			{
 				Name:   ":timer: 実行時間",
-				Value:  fmt.Sprintf("%.1fs", duration.Seconds()),
+				Value:  formatDuration(duration),
 				Inline: true,
 			},
 			{
