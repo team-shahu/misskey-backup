@@ -174,28 +174,23 @@ func NewR2Storage(cfg *config.Config) (*R2Storage, error) {
 		return nil, fmt.Errorf("invalid R2 endpoint format: %s", cfg.R2Endpoint)
 	}
 
-	// R2エンドポイントリゾルバー
-	r2Resolver := aws.EndpointResolverWithOptionsFunc(func(service, region string, options ...interface{}) (aws.Endpoint, error) {
-		return aws.Endpoint{
-			URL: fmt.Sprintf("https://%s.r2.cloudflarestorage.com", accountID),
-		}, nil
-	})
-
-	// AWS SDK設定
+	// Cloudflare R2公式ドキュメントに基づく設定
 	awsCfg, err := awsconfig.LoadDefaultConfig(context.Background(),
-		awsconfig.WithEndpointResolverWithOptions(r2Resolver),
 		awsconfig.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(
 			cfg.R2AccessKeyID,
 			cfg.R2SecretAccessKey,
 			"",
 		)),
-		awsconfig.WithRegion("apac"),
+		awsconfig.WithRegion("auto"),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load AWS config: %w", err)
 	}
 
-	client := s3.NewFromConfig(awsCfg)
+	// クライアント作成
+	client := s3.NewFromConfig(awsCfg, func(o *s3.Options) {
+		o.BaseEndpoint = aws.String(fmt.Sprintf("https://%s.r2.cloudflarestorage.com", accountID))
+	})
 
 	return &R2Storage{
 		client:     client,
