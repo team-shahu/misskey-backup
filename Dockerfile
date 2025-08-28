@@ -44,6 +44,9 @@ COPY --from=builder /app/misskey-backup .
 # 設定ファイル用ディレクトリを作成
 RUN mkdir -p /app/config
 
+# バックアップディレクトリを作成
+RUN mkdir -p /app/backups
+
 # 権限を設定
 RUN chown -R appuser:appgroup /app
 
