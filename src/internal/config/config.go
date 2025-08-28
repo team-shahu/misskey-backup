@@ -28,6 +28,11 @@ type Config struct {
 	R2Prefix          string
 	R2BucketACL       string
 
+	// リトライ設定
+	MaxRetries     int
+	RetryBaseDelay int // 秒単位
+	RetryMaxDelay  int // 秒単位
+
 	// 通知設定
 	Notification      bool
 	DiscordWebhookURL string
@@ -58,6 +63,9 @@ func Load() (*Config, error) {
 		R2BucketName:      getEnv("R2_BUCKET_NAME", ""),
 		R2Prefix:          getEnv("R2_PREFIX", ""),
 		R2BucketACL:       getEnv("BACKUP_BUCKET_ACL", ""),
+		MaxRetries:        getEnvAsInt("MAX_RETRIES", 5),
+		RetryBaseDelay:    getEnvAsInt("RETRY_BASE_DELAY", 1),
+		RetryMaxDelay:     getEnvAsInt("RETRY_MAX_DELAY", 30),
 		Notification:      getEnvAsBool("NOTIFICATION", false),
 		DiscordWebhookURL: getEnv("DISCORD_WEBHOOK_URL", ""),
 		CronSchedule:      getEnv("CRON_SCHEDULE", "0 5,17 * * *"),

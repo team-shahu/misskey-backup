@@ -4,8 +4,11 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"math"
+	"math/rand"
 	"os"
 	"path"
+	"time"
 
 	"misskey-backup/internal/config"
 
@@ -21,6 +24,103 @@ type R2Storage struct {
 	bucketName string
 	prefix     string
 	config     *config.Config
+}
+
+// Retry configuration - デフォルト値
+const (
+	defaultMaxRetries = 5
+	defaultBaseDelay  = 1 * time.Second
+	defaultMaxDelay   = 30 * time.Second
+)
+
+// isRetryableError checks if the error is retryable
+func isRetryableError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	// Check for specific error patterns that are retryable
+	errStr := err.Error()
+
+	// 500 Internal Server Error
+	if errStr == "operation error S3: PutObject, exceeded maximum number of attempts, 3, https response error StatusCode: 500" {
+		return true
+	}
+
+	// Generic 500 errors from Cloudflare R2
+	if errStr == "operation error S3: PutObject, exceeded maximum number of attempts, 3, https response error StatusCode: 500, RequestID: , HostID: , api error InternalError: We encountered an internal error. Please try again." {
+		return true
+	}
+
+	// Check for other common retryable patterns
+	if errStr == "operation error S3: PutObject, exceeded maximum number of attempts, 3, https response error StatusCode: 503" {
+		return true
+	}
+
+	if errStr == "operation error S3: PutObject, exceeded maximum number of attempts, 3, https response error StatusCode: 429" {
+		return true
+	}
+
+	return false
+}
+
+// exponentialBackoff calculates delay with jitter
+func (r *R2Storage) exponentialBackoff(attempt int) time.Duration {
+	baseDelay := time.Duration(r.config.RetryBaseDelay) * time.Second
+	maxDelay := time.Duration(r.config.RetryMaxDelay) * time.Second
+
+	delay := float64(baseDelay) * math.Pow(2, float64(attempt))
+	if delay > float64(maxDelay) {
+		delay = float64(maxDelay)
+	}
+
+	// Add jitter (±25%)
+	jitter := delay * 0.25 * (rand.Float64()*2 - 1)
+	delay += jitter
+
+	return time.Duration(delay)
+}
+
+// retryWithBackoff executes an operation with exponential backoff
+func (r *R2Storage) retryWithBackoff(ctx context.Context, operation func() error, operationName string) error {
+	var lastErr error
+	maxRetries := r.config.MaxRetries
+
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		if attempt > 0 {
+			delay := r.exponentialBackoff(attempt - 1)
+			logrus.Warnf("Retrying %s after %v (attempt %d/%d): %v",
+				operationName, delay, attempt, maxRetries, lastErr)
+
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(delay):
+			}
+		}
+
+		err := operation()
+		if err == nil {
+			if attempt > 0 {
+				logrus.Infof("%s succeeded after %d retries", operationName, attempt)
+			}
+			return nil
+		}
+
+		lastErr = err
+
+		if !isRetryableError(err) {
+			logrus.Errorf("%s failed with non-retryable error: %v", operationName, err)
+			return err
+		}
+
+		if attempt == maxRetries {
+			logrus.Errorf("%s failed after %d retries: %v", operationName, maxRetries, err)
+			return fmt.Errorf("%s failed after %d retries: %w", operationName, maxRetries, err)
+		}
+	}
+
+	return lastErr
 }
 
 func NewR2Storage(cfg *config.Config) (*R2Storage, error) {
@@ -60,22 +160,30 @@ func NewR2Storage(cfg *config.Config) (*R2Storage, error) {
 }
 
 func (r *R2Storage) Upload(ctx context.Context, localPath, remotePath string) (string, error) {
-	file, err := os.Open(localPath)
-	if err != nil {
-		return "", fmt.Errorf("failed to open file: %w", err)
-	}
-	defer file.Close()
-
 	// プレフィックスを付けてリモートパスを構築
 	fullRemotePath := path.Join(r.prefix, remotePath)
 
-	_, err = r.client.PutObject(ctx, &s3.PutObjectInput{
-		Bucket: aws.String(r.bucketName),
-		Key:    aws.String(fullRemotePath),
-		Body:   file,
-	})
+	err := r.retryWithBackoff(ctx, func() error {
+		file, err := os.Open(localPath)
+		if err != nil {
+			return fmt.Errorf("failed to open file: %w", err)
+		}
+		defer file.Close()
+
+		_, err = r.client.PutObject(ctx, &s3.PutObjectInput{
+			Bucket: aws.String(r.bucketName),
+			Key:    aws.String(fullRemotePath),
+			Body:   file,
+		})
+		if err != nil {
+			return err
+		}
+
+		return nil
+	}, "upload to R2")
+
 	if err != nil {
-		return "", fmt.Errorf("failed to upload file: %w", err)
+		return "", fmt.Errorf("failed to upload file after retries: %w", err)
 	}
 
 	logrus.Infof("Uploaded %s to R2: %s", localPath, fullRemotePath)
@@ -88,12 +196,18 @@ func (r *R2Storage) Upload(ctx context.Context, localPath, remotePath string) (s
 func (r *R2Storage) Download(ctx context.Context, remotePath, localPath string) error {
 	fullRemotePath := path.Join(r.prefix, remotePath)
 
-	result, err := r.client.GetObject(ctx, &s3.GetObjectInput{
-		Bucket: aws.String(r.bucketName),
-		Key:    aws.String(fullRemotePath),
-	})
+	var result *s3.GetObjectOutput
+	err := r.retryWithBackoff(ctx, func() error {
+		var err error
+		result, err = r.client.GetObject(ctx, &s3.GetObjectInput{
+			Bucket: aws.String(r.bucketName),
+			Key:    aws.String(fullRemotePath),
+		})
+		return err
+	}, "download from R2")
+
 	if err != nil {
-		return fmt.Errorf("failed to get object: %w", err)
+		return fmt.Errorf("failed to get object after retries: %w", err)
 	}
 	defer result.Body.Close()
 
@@ -115,12 +229,16 @@ func (r *R2Storage) Download(ctx context.Context, remotePath, localPath string) 
 func (r *R2Storage) Delete(ctx context.Context, remotePath string) error {
 	fullRemotePath := path.Join(r.prefix, remotePath)
 
-	_, err := r.client.DeleteObject(ctx, &s3.DeleteObjectInput{
-		Bucket: aws.String(r.bucketName),
-		Key:    aws.String(fullRemotePath),
-	})
+	err := r.retryWithBackoff(ctx, func() error {
+		_, err := r.client.DeleteObject(ctx, &s3.DeleteObjectInput{
+			Bucket: aws.String(r.bucketName),
+			Key:    aws.String(fullRemotePath),
+		})
+		return err
+	}, "delete from R2")
+
 	if err != nil {
-		return fmt.Errorf("failed to delete object: %w", err)
+		return fmt.Errorf("failed to delete object after retries: %w", err)
 	}
 
 	logrus.Infof("Deleted %s from R2", fullRemotePath)
@@ -130,12 +248,18 @@ func (r *R2Storage) Delete(ctx context.Context, remotePath string) error {
 func (r *R2Storage) List(ctx context.Context, prefix string) ([]FileInfo, error) {
 	fullPrefix := path.Join(r.prefix, prefix)
 
-	result, err := r.client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
-		Bucket: aws.String(r.bucketName),
-		Prefix: aws.String(fullPrefix),
-	})
+	var result *s3.ListObjectsV2Output
+	err := r.retryWithBackoff(ctx, func() error {
+		var err error
+		result, err = r.client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
+			Bucket: aws.String(r.bucketName),
+			Prefix: aws.String(fullPrefix),
+		})
+		return err
+	}, "list objects from R2")
+
 	if err != nil {
-		return nil, fmt.Errorf("failed to list objects: %w", err)
+		return nil, fmt.Errorf("failed to list objects after retries: %w", err)
 	}
 
 	var files []FileInfo
