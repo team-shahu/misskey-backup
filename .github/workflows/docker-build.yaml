@@ -45,8 +45,6 @@ jobs:
         with:
           context: .
           push: true
-          build-args: |
-            enable_mecab=1
           tags: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.calendar_version.outputs.version }}

@@ -8,13 +8,13 @@ RUN apk add --no-cache git ca-certificates tzdata
 WORKDIR /app
 
 # go.modとgo.sumをコピー
-COPY go.mod go.sum ./
+COPY src/go.mod src/go.sum ./
 
 # 依存関係をダウンロード
 RUN go mod download
 
 # ソースコードをコピー
-COPY . .
+COPY src/ .
 
 # バイナリをビルド
 RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o misskey-backup .
