@@ -1,8 +1,6 @@
 services:
   backup:
-    build:
-      context: ./src
-      dockerfile: ../Dockerfile
+    image: ghcr.io/team-shahu/misskey-backup:latest
     container_name: misskey-backup-go
     restart: always
     environment:
