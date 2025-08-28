@@ -33,7 +33,7 @@ const (
 	defaultBaseDelay  = 1 * time.Second
 	defaultMaxDelay   = 30 * time.Second
 	// 大きなファイル用のタイムアウト設定（デフォルト）
-	defaultUploadTimeout = 30 * time.Minute
+	defaultUploadTimeout = 60 * time.Minute // rcloneのデフォルトに合わせて60分
 	// チャンクサイズ（5MB）
 	chunkSize = 5 * 1024 * 1024
 )
@@ -218,13 +218,14 @@ func (r *R2Storage) Upload(ctx context.Context, localPath, remotePath string) (s
 	fileSize := fileInfo.Size()
 	logrus.Infof("Uploading file: %s (size: %.2f MB)", localPath, float64(fileSize)/1024/1024)
 
-	// 100MB以上の場合はマルチパートアップロードを使用
-	if fileSize > 100*1024*1024 {
-		logrus.Infof("Large file detected (%.2f MB), using multipart upload", float64(fileSize)/1024/1024)
+	// 5GB以下のファイルは単一アップロードを使用
+	if fileSize > 5*1024*1024*1024 { // 5GB
+		logrus.Infof("Very large file detected (%.2f MB), using multipart upload", float64(fileSize)/1024/1024)
 		return r.uploadMultipart(ctx, localPath, fullRemotePath, fileSize)
 	}
 
 	// 小さいファイルは通常のアップロード
+	logrus.Infof("File size within single upload limit (%.2f MB), using simple upload", float64(fileSize)/1024/1024)
 	return r.uploadSimple(ctx, localPath, fullRemotePath)
 }
 
@@ -297,11 +298,15 @@ func (r *R2Storage) uploadMultipart(ctx context.Context, localPath, fullRemotePa
 	uploadID := createResp.UploadId
 	logrus.Infof("Created multipart upload with ID: %s", *uploadID)
 
-	// チャンクサイズ（100MB）
-	// https://developers.cloudflare.com/r2/examples/rclone/#a-note-about-multipart-upload-part-sizes
-	// なんかこのくらいならいけそう
-	chunkSize := int64(100 * 1024 * 1024)
+	// チャンクサイズを設定から取得（MB単位をバイト単位に変換）
+	chunkSizeMB := r.config.ChunkSize
+	if chunkSizeMB == 0 {
+		chunkSizeMB = 50 // デフォルト値
+	}
+	chunkSize := int64(chunkSizeMB) * 1024 * 1024
 	numParts := int((fileSize + chunkSize - 1) / chunkSize)
+
+	logrus.Infof("Using chunk size: %d MB (%d parts)", chunkSizeMB, numParts)
 
 	var completedParts []types.CompletedPart
 
