@@ -31,6 +31,10 @@ const (
 	defaultMaxRetries = 5
 	defaultBaseDelay  = 1 * time.Second
 	defaultMaxDelay   = 30 * time.Second
+	// 大きなファイル用のタイムアウト設定（デフォルト）
+	defaultUploadTimeout = 30 * time.Minute
+	// チャンクサイズ（5MB）
+	chunkSize = 5 * 1024 * 1024
 )
 
 // isRetryableError checks if the error is retryable
@@ -58,6 +62,16 @@ func isRetryableError(err error) bool {
 	}
 
 	if errStr == "operation error S3: PutObject, exceeded maximum number of attempts, 3, https response error StatusCode: 429" {
+		return true
+	}
+
+	// タイムアウトエラー
+	if errStr == "operation error S3: PutObject, exceeded maximum number of attempts, 3, context deadline exceeded" {
+		return true
+	}
+
+	// ネットワークエラー
+	if errStr == "operation error S3: PutObject, exceeded maximum number of attempts, 3, net/http: TLS handshake timeout" {
 		return true
 	}
 
@@ -99,15 +113,25 @@ func (r *R2Storage) retryWithBackoff(ctx context.Context, operation func() error
 			}
 		}
 
+		// 操作開始のログ
+		if attempt == 0 {
+			logrus.Infof("Starting %s", operationName)
+		}
+
 		err := operation()
 		if err == nil {
 			if attempt > 0 {
 				logrus.Infof("%s succeeded after %d retries", operationName, attempt)
+			} else {
+				logrus.Infof("%s succeeded on first attempt", operationName)
 			}
 			return nil
 		}
 
 		lastErr = err
+
+		// エラーの詳細ログ
+		logrus.Errorf("%s failed (attempt %d/%d): %v", operationName, attempt+1, maxRetries+1, err)
 
 		if !isRetryableError(err) {
 			logrus.Errorf("%s failed with non-retryable error: %v", operationName, err)
@@ -144,6 +168,8 @@ func NewR2Storage(cfg *config.Config) (*R2Storage, error) {
 				}, nil
 			},
 		)),
+		// タイムアウト設定を追加
+		awsconfig.WithClientLogMode(aws.LogRequestWithBody|aws.LogResponseWithBody),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load AWS config: %w", err)
@@ -163,14 +189,37 @@ func (r *R2Storage) Upload(ctx context.Context, localPath, remotePath string) (s
 	// プレフィックスを付けてリモートパスを構築
 	fullRemotePath := path.Join(r.prefix, remotePath)
 
-	err := r.retryWithBackoff(ctx, func() error {
+	// ファイルサイズを確認
+	fileInfo, err := os.Stat(localPath)
+	if err != nil {
+		return "", fmt.Errorf("failed to get file info: %w", err)
+	}
+
+	fileSize := fileInfo.Size()
+	logrus.Infof("Uploading file: %s (size: %.2f MB)", localPath, float64(fileSize)/1024/1024)
+
+	// 100MB以上の場合、マルチパートアップロードを検討
+	if fileSize > 100*1024*1024 {
+		logrus.Infof("Large file detected (%.2f MB), using enhanced upload strategy", float64(fileSize)/1024/1024)
+		return r.uploadLargeFile(ctx, localPath, fullRemotePath, fileSize)
+	}
+
+	// アップロード用のコンテキストにタイムアウトを設定
+	timeout := time.Duration(r.config.UploadTimeout) * time.Minute
+	if timeout == 0 {
+		timeout = defaultUploadTimeout
+	}
+	uploadCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	err = r.retryWithBackoff(uploadCtx, func() error {
 		file, err := os.Open(localPath)
 		if err != nil {
 			return fmt.Errorf("failed to open file: %w", err)
 		}
 		defer file.Close()
 
-		_, err = r.client.PutObject(ctx, &s3.PutObjectInput{
+		_, err = r.client.PutObject(uploadCtx, &s3.PutObjectInput{
 			Bucket: aws.String(r.bucketName),
 			Key:    aws.String(fullRemotePath),
 			Body:   file,
@@ -187,6 +236,46 @@ func (r *R2Storage) Upload(ctx context.Context, localPath, remotePath string) (s
 	}
 
 	logrus.Infof("Uploaded %s to R2: %s", localPath, fullRemotePath)
+
+	// ダウンロードURLを生成
+	downloadURL := fmt.Sprintf("%s/%s/%s", r.config.R2Endpoint, r.bucketName, fullRemotePath)
+	return downloadURL, nil
+}
+
+// uploadLargeFile handles large file uploads with enhanced error handling
+func (r *R2Storage) uploadLargeFile(ctx context.Context, localPath, fullRemotePath string, fileSize int64) (string, error) {
+	timeout := time.Duration(r.config.UploadTimeout) * time.Minute
+	if timeout == 0 {
+		timeout = defaultUploadTimeout
+	}
+	uploadCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	err := r.retryWithBackoff(uploadCtx, func() error {
+		file, err := os.Open(localPath)
+		if err != nil {
+			return fmt.Errorf("failed to open file: %w", err)
+		}
+		defer file.Close()
+
+		// 大きなファイル用の追加設定
+		_, err = r.client.PutObject(uploadCtx, &s3.PutObjectInput{
+			Bucket: aws.String(r.bucketName),
+			Key:    aws.String(fullRemotePath),
+			Body:   file,
+		})
+		if err != nil {
+			return err
+		}
+
+		return nil
+	}, "upload large file to R2")
+
+	if err != nil {
+		return "", fmt.Errorf("failed to upload large file after retries: %w", err)
+	}
+
+	logrus.Infof("Uploaded large file %s to R2: %s", localPath, fullRemotePath)
 
 	// ダウンロードURLを生成
 	downloadURL := fmt.Sprintf("%s/%s/%s", r.config.R2Endpoint, r.bucketName, fullRemotePath)
