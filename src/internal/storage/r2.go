@@ -297,8 +297,10 @@ func (r *R2Storage) uploadMultipart(ctx context.Context, localPath, fullRemotePa
 	uploadID := createResp.UploadId
 	logrus.Infof("Created multipart upload with ID: %s", *uploadID)
 
-	// チャンクサイズ（10MB）
-	chunkSize := int64(10 * 1024 * 1024)
+	// チャンクサイズ（100MB）
+	// https://developers.cloudflare.com/r2/examples/rclone/#a-note-about-multipart-upload-part-sizes
+	// なんかこのくらいならいけそう
+	chunkSize := int64(100 * 1024 * 1024)
 	numParts := int((fileSize + chunkSize - 1) / chunkSize)
 
 	var completedParts []types.CompletedPart
