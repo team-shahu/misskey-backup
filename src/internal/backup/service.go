@@ -46,7 +46,10 @@ func (s *Service) CreateBackup(ctx context.Context) (*BackupResult, error) {
 
 	// バックアップディレクトリの作成
 	if err := os.MkdirAll(s.config.BackupDir, 0755); err != nil {
-		return nil, fmt.Errorf("failed to create backup directory: %w", err)
+		// ディレクトリが既に存在する場合はエラーを無視
+		if !os.IsExist(err) {
+			return nil, fmt.Errorf("failed to create backup directory: %w", err)
+		}
 	}
 
 	// バックアップファイル名の生成
