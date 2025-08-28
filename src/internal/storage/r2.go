@@ -219,15 +219,19 @@ func (r *R2Storage) Upload(ctx context.Context, localPath, remotePath string) (s
 		}
 		defer file.Close()
 
+		logrus.Infof("Starting upload with timeout: %v", timeout)
+
 		_, err = r.client.PutObject(uploadCtx, &s3.PutObjectInput{
 			Bucket: aws.String(r.bucketName),
 			Key:    aws.String(fullRemotePath),
 			Body:   file,
 		})
 		if err != nil {
+			logrus.Errorf("Upload failed: %v", err)
 			return err
 		}
 
+		logrus.Infof("Upload completed successfully")
 		return nil
 	}, "upload to R2")
 
@@ -251,12 +255,22 @@ func (r *R2Storage) uploadLargeFile(ctx context.Context, localPath, fullRemotePa
 	uploadCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
+	logrus.Infof("Starting large file upload with timeout: %v", timeout)
+
 	err := r.retryWithBackoff(uploadCtx, func() error {
 		file, err := os.Open(localPath)
 		if err != nil {
 			return fmt.Errorf("failed to open file: %w", err)
 		}
 		defer file.Close()
+
+		// ファイル情報を取得
+		fileInfo, err := file.Stat()
+		if err != nil {
+			return fmt.Errorf("failed to get file info: %w", err)
+		}
+
+		logrus.Infof("Uploading file: %s (size: %.2f MB)", localPath, float64(fileInfo.Size())/1024/1024)
 
 		// 大きなファイル用の追加設定
 		_, err = r.client.PutObject(uploadCtx, &s3.PutObjectInput{
@@ -265,9 +279,11 @@ func (r *R2Storage) uploadLargeFile(ctx context.Context, localPath, fullRemotePa
 			Body:   file,
 		})
 		if err != nil {
+			logrus.Errorf("Upload failed: %v", err)
 			return err
 		}
 
+		logrus.Infof("Upload completed successfully")
 		return nil
 	}, "upload large file to R2")
 

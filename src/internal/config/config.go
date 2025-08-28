@@ -36,6 +36,9 @@ type Config struct {
 	// アップロード設定
 	UploadTimeout int // 分単位
 
+	// デバッグ設定
+	Debug bool
+
 	// 通知設定
 	Notification      bool
 	DiscordWebhookURL string
@@ -70,6 +73,7 @@ func Load() (*Config, error) {
 		RetryBaseDelay:    getEnvAsInt("RETRY_BASE_DELAY", 1),
 		RetryMaxDelay:     getEnvAsInt("RETRY_MAX_DELAY", 30),
 		UploadTimeout:     getEnvAsInt("UPLOAD_TIMEOUT", 120),
+		Debug:             getEnvAsBool("DEBUG", false),
 		Notification:      getEnvAsBool("NOTIFICATION", false),
 		DiscordWebhookURL: getEnv("DISCORD_WEBHOOK_URL", ""),
 		CronSchedule:      getEnv("CRON_SCHEDULE", "0 5,17 * * *"),
