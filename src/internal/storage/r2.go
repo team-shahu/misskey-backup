@@ -16,6 +16,7 @@ import (
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/sirupsen/logrus"
 )
 
@@ -153,23 +154,42 @@ func NewR2Storage(cfg *config.Config) (*R2Storage, error) {
 		return nil, fmt.Errorf("R2 configuration is incomplete")
 	}
 
+	// エンドポイントからアカウントIDを抽出
+	// 例: https://a8e8211c674c2b00f3a8996b65b56447.r2.cloudflarestorage.com
+	// から a8e8211c674c2b00f3a8996b65b56447 を抽出
+	endpointURL := cfg.R2Endpoint
+	accountID := ""
+	if len(endpointURL) > 0 {
+		// https:// を除去
+		if len(endpointURL) > 8 && endpointURL[:8] == "https://" {
+			accountID = endpointURL[8:]
+		}
+		// .r2.cloudflarestorage.com を除去
+		if len(accountID) > 25 && accountID[len(accountID)-25:] == ".r2.cloudflarestorage.com" {
+			accountID = accountID[:len(accountID)-25]
+		}
+	}
+
+	if accountID == "" {
+		return nil, fmt.Errorf("invalid R2 endpoint format: %s", cfg.R2Endpoint)
+	}
+
+	// R2エンドポイントリゾルバー
+	r2Resolver := aws.EndpointResolverWithOptionsFunc(func(service, region string, options ...interface{}) (aws.Endpoint, error) {
+		return aws.Endpoint{
+			URL: fmt.Sprintf("https://%s.r2.cloudflarestorage.com", accountID),
+		}, nil
+	})
+
 	// AWS SDK設定
 	awsCfg, err := awsconfig.LoadDefaultConfig(context.Background(),
-		awsconfig.WithRegion("auto"),
+		awsconfig.WithEndpointResolverWithOptions(r2Resolver),
 		awsconfig.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(
 			cfg.R2AccessKeyID,
 			cfg.R2SecretAccessKey,
 			"",
 		)),
-		awsconfig.WithEndpointResolverWithOptions(aws.EndpointResolverWithOptionsFunc(
-			func(service, region string, options ...interface{}) (aws.Endpoint, error) {
-				return aws.Endpoint{
-					URL: cfg.R2Endpoint,
-				}, nil
-			},
-		)),
-		// タイムアウト設定を追加
-		awsconfig.WithClientLogMode(aws.LogRequestWithBody|aws.LogResponseWithBody),
+		awsconfig.WithRegion("apac"),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load AWS config: %w", err)
@@ -198,12 +218,18 @@ func (r *R2Storage) Upload(ctx context.Context, localPath, remotePath string) (s
 	fileSize := fileInfo.Size()
 	logrus.Infof("Uploading file: %s (size: %.2f MB)", localPath, float64(fileSize)/1024/1024)
 
-	// 100MB以上の場合、マルチパートアップロードを検討
+	// 100MB以上の場合はマルチパートアップロードを使用
 	if fileSize > 100*1024*1024 {
-		logrus.Infof("Large file detected (%.2f MB), using enhanced upload strategy", float64(fileSize)/1024/1024)
-		return r.uploadLargeFile(ctx, localPath, fullRemotePath, fileSize)
+		logrus.Infof("Large file detected (%.2f MB), using multipart upload", float64(fileSize)/1024/1024)
+		return r.uploadMultipart(ctx, localPath, fullRemotePath, fileSize)
 	}
 
+	// 小さいファイルは通常のアップロード
+	return r.uploadSimple(ctx, localPath, fullRemotePath)
+}
+
+// uploadSimple handles simple file uploads
+func (r *R2Storage) uploadSimple(ctx context.Context, localPath, fullRemotePath string) (string, error) {
 	// アップロード用のコンテキストにタイムアウトを設定
 	timeout := time.Duration(r.config.UploadTimeout) * time.Minute
 	if timeout == 0 {
@@ -212,28 +238,30 @@ func (r *R2Storage) Upload(ctx context.Context, localPath, remotePath string) (s
 	uploadCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	err = r.retryWithBackoff(uploadCtx, func() error {
+	err := r.retryWithBackoff(uploadCtx, func() error {
 		file, err := os.Open(localPath)
 		if err != nil {
 			return fmt.Errorf("failed to open file: %w", err)
 		}
 		defer file.Close()
 
-		logrus.Infof("Starting upload with timeout: %v", timeout)
+		logrus.Infof("Starting simple upload with timeout: %v", timeout)
 
-		_, err = r.client.PutObject(uploadCtx, &s3.PutObjectInput{
+		input := &s3.PutObjectInput{
 			Bucket: aws.String(r.bucketName),
 			Key:    aws.String(fullRemotePath),
 			Body:   file,
-		})
+		}
+
+		_, err = r.client.PutObject(uploadCtx, input)
 		if err != nil {
-			logrus.Errorf("Upload failed: %v", err)
+			logrus.Errorf("PutObject failed: %v", err)
 			return err
 		}
 
-		logrus.Infof("Upload completed successfully")
+		logrus.Infof("Simple upload completed successfully")
 		return nil
-	}, "upload to R2")
+	}, "simple upload to R2")
 
 	if err != nil {
 		return "", fmt.Errorf("failed to upload file after retries: %w", err)
@@ -246,8 +274,8 @@ func (r *R2Storage) Upload(ctx context.Context, localPath, remotePath string) (s
 	return downloadURL, nil
 }
 
-// uploadLargeFile handles large file uploads with enhanced error handling
-func (r *R2Storage) uploadLargeFile(ctx context.Context, localPath, fullRemotePath string, fileSize int64) (string, error) {
+// uploadMultipart handles multipart upload for large files
+func (r *R2Storage) uploadMultipart(ctx context.Context, localPath, fullRemotePath string, fileSize int64) (string, error) {
 	timeout := time.Duration(r.config.UploadTimeout) * time.Minute
 	if timeout == 0 {
 		timeout = defaultUploadTimeout
@@ -255,43 +283,92 @@ func (r *R2Storage) uploadLargeFile(ctx context.Context, localPath, fullRemotePa
 	uploadCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	logrus.Infof("Starting large file upload with timeout: %v", timeout)
+	logrus.Infof("Starting multipart upload with timeout: %v", timeout)
 
-	err := r.retryWithBackoff(uploadCtx, func() error {
-		file, err := os.Open(localPath)
-		if err != nil {
-			return fmt.Errorf("failed to open file: %w", err)
-		}
-		defer file.Close()
-
-		// ファイル情報を取得
-		fileInfo, err := file.Stat()
-		if err != nil {
-			return fmt.Errorf("failed to get file info: %w", err)
-		}
-
-		logrus.Infof("Uploading file: %s (size: %.2f MB)", localPath, float64(fileInfo.Size())/1024/1024)
-
-		// 大きなファイル用の追加設定
-		_, err = r.client.PutObject(uploadCtx, &s3.PutObjectInput{
-			Bucket: aws.String(r.bucketName),
-			Key:    aws.String(fullRemotePath),
-			Body:   file,
-		})
-		if err != nil {
-			logrus.Errorf("Upload failed: %v", err)
-			return err
-		}
-
-		logrus.Infof("Upload completed successfully")
-		return nil
-	}, "upload large file to R2")
-
+	// マルチパートアップロードの開始
+	createResp, err := r.client.CreateMultipartUpload(uploadCtx, &s3.CreateMultipartUploadInput{
+		Bucket: aws.String(r.bucketName),
+		Key:    aws.String(fullRemotePath),
+	})
 	if err != nil {
-		return "", fmt.Errorf("failed to upload large file after retries: %w", err)
+		return "", fmt.Errorf("failed to create multipart upload: %w", err)
 	}
 
-	logrus.Infof("Uploaded large file %s to R2: %s", localPath, fullRemotePath)
+	uploadID := createResp.UploadId
+	logrus.Infof("Created multipart upload with ID: %s", *uploadID)
+
+	// チャンクサイズ（10MB）
+	chunkSize := int64(10 * 1024 * 1024)
+	numParts := int((fileSize + chunkSize - 1) / chunkSize)
+
+	var completedParts []types.CompletedPart
+
+	file, err := os.Open(localPath)
+	if err != nil {
+		return "", fmt.Errorf("failed to open file: %w", err)
+	}
+	defer file.Close()
+
+	// 各パートをアップロード
+	for partNumber := 1; partNumber <= numParts; partNumber++ {
+		logrus.Infof("Uploading part %d/%d", partNumber, numParts)
+
+		// パートのサイズを計算
+		start := int64(partNumber-1) * chunkSize
+		end := start + chunkSize
+		if end > fileSize {
+			end = fileSize
+		}
+		partSize := end - start
+
+		// ファイルの位置を設定
+		_, err = file.Seek(start, 0)
+		if err != nil {
+			return "", fmt.Errorf("failed to seek file: %w", err)
+		}
+
+		// パートをアップロード
+		partNumberInt32 := int32(partNumber)
+		partSizeInt64 := partSize
+
+		uploadPartResp, err := r.client.UploadPart(uploadCtx, &s3.UploadPartInput{
+			Bucket:        aws.String(r.bucketName),
+			Key:           aws.String(fullRemotePath),
+			PartNumber:    &partNumberInt32,
+			UploadId:      uploadID,
+			Body:          io.LimitReader(file, partSize),
+			ContentLength: &partSizeInt64,
+		})
+		if err != nil {
+			// マルチパートアップロードを中止
+			r.client.AbortMultipartUpload(uploadCtx, &s3.AbortMultipartUploadInput{
+				Bucket:   aws.String(r.bucketName),
+				Key:      aws.String(fullRemotePath),
+				UploadId: uploadID,
+			})
+			return "", fmt.Errorf("failed to upload part %d: %w", partNumber, err)
+		}
+
+		completedParts = append(completedParts, types.CompletedPart{
+			ETag:       uploadPartResp.ETag,
+			PartNumber: &partNumberInt32,
+		})
+
+		logrus.Infof("Completed part %d/%d", partNumber, numParts)
+	}
+
+	// マルチパートアップロードを完了
+	_, err = r.client.CompleteMultipartUpload(uploadCtx, &s3.CompleteMultipartUploadInput{
+		Bucket:          aws.String(r.bucketName),
+		Key:             aws.String(fullRemotePath),
+		UploadId:        uploadID,
+		MultipartUpload: &types.CompletedMultipartUpload{Parts: completedParts},
+	})
+	if err != nil {
+		return "", fmt.Errorf("failed to complete multipart upload: %w", err)
+	}
+
+	logrus.Infof("Completed multipart upload for file: %s", localPath)
 
 	// ダウンロードURLを生成
 	downloadURL := fmt.Sprintf("%s/%s/%s", r.config.R2Endpoint, r.bucketName, fullRemotePath)

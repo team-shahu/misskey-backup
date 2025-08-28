@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"runtime/debug"
 	"syscall"
 	"time"
 
@@ -17,6 +18,15 @@ import (
 )
 
 func main() {
+	// パニックリカバリー
+	defer func() {
+		if r := recover(); r != nil {
+			logrus.Errorf("Panic recovered: %v", r)
+			logrus.Errorf("Stack trace: %s", debug.Stack())
+			os.Exit(1)
+		}
+	}()
+
 	// ログ設定
 	logrus.SetFormatter(&logrus.TextFormatter{
 		FullTimestamp: true,
@@ -27,6 +37,12 @@ func main() {
 	cfg, err := config.Load()
 	if err != nil {
 		logrus.Fatalf("Failed to load config: %v", err)
+	}
+
+	// デバッグモードの設定
+	if cfg.Debug {
+		logrus.SetLevel(logrus.DebugLevel)
+		logrus.Info("Debug mode enabled")
 	}
 
 	// バックアップサービス初期化
@@ -51,6 +67,13 @@ func main() {
 
 	// スケジューラー開始
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				logrus.Errorf("Scheduler panic recovered: %v", r)
+				logrus.Errorf("Stack trace: %s", debug.Stack())
+			}
+		}()
+
 		if err := scheduler.Start(ctx); err != nil {
 			logrus.Errorf("Scheduler error: %v", err)
 		}
