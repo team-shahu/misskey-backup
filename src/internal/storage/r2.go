@@ -218,8 +218,8 @@ func (r *R2Storage) Upload(ctx context.Context, localPath, remotePath string) (s
 	fileSize := fileInfo.Size()
 	logrus.Infof("Uploading file: %s (size: %.2f MB)", localPath, float64(fileSize)/1024/1024)
 
-	// 5GB以下のファイルは単一アップロードを使用
-	if fileSize > 5*1024*1024*1024 { // 5GB
+	// 1GB以上のファイルは単一アップロードを使用
+	if fileSize > 1*1024*1024*1024 {
 		logrus.Infof("Very large file detected (%.2f MB), using multipart upload", float64(fileSize)/1024/1024)
 		return r.uploadMultipart(ctx, localPath, fullRemotePath, fileSize)
 	}
