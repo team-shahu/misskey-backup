@@ -1,16 +1,19 @@
 services:
   backup:
-    build: .
-    container_name: backup
+    build:
+      context: ./src
+      dockerfile: ../Dockerfile
+    container_name: misskey-backup-go
     restart: always
     environment:
       TZ: Asia/Tokyo
     networks:
       - misskey-postgres
-    #env_file:
-    #  - ./config/.env
+    env_file:
+      - ./config/.env
     volumes:
-      - misskey-data:/misskey-data
+      - mi-backups:/app/backups
+      - ./config:/app/config:ro
     logging:
       options:
         max-size: 5m
@@ -19,15 +22,16 @@ services:
         limits:
           cpus: '1'
           memory: '1g'
-    command: ["cron", "-f"]
     healthcheck:
-      test: ["CMD", "cron", "status"]
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
       interval: 1m
       timeout: 10s
       retries: 3
+      start_period: 30s
+
 networks:
   misskey-postgres:
     external: true
+
 volumes:
-  misskey-data:
-  
+  mi-backups:

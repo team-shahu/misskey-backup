@@ -1,46 +1,61 @@
-FROM debian:trixie-slim
+# ビルドステージ
+FROM golang:1.25-alpine AS builder
 
-ARG RCLONE_CONFIG_BACKUP_ENDPOINT
-ARG RCLONE_CONFIG_BACKUP_ACCESS_KEY_ID
-ARG RCLONE_CONFIG_BACKUP_SECRET_ACCESS_KEY
-ARG RCLONE_CONFIG_BACKUP_BUCKET_ACL
-ARG GOOGLE_DRIVE_BACKUP
-ARG GDRIVE_ACCOUNT_FILE
-ARG GDRIVE_PARENT_ID
+# 必要なパッケージをインストール
+RUN apk add --no-cache git ca-certificates tzdata
 
-# install tools
-RUN apt-get update && apt-get install curl unzip zstd wget postgresql -y && apt-get install -y cron --no-install-recommends
+# 作業ディレクトリを設定
+WORKDIR /app
 
-# rclone
-RUN curl https://rclone.org/install.sh | bash
+# go.modとgo.sumをコピー
+COPY go.mod go.sum ./
 
+# 依存関係をダウンロード
+RUN go mod download
 
-# gdrive
-COPY ./config/ /root/
-RUN wget https://github.com/glotlabs/gdrive/releases/download/3.9.1/gdrive_linux-x64.tar.gz \
-    && tar -xzf gdrive_linux-x64.tar.gz \
-    && mv gdrive /usr/local/bin/ \
-    && chmod +x /usr/local/bin/gdrive 
+# ソースコードをコピー
+COPY . .
 
-RUN mkdir /tools
-COPY <<EOF /root/.config/rclone/rclone.conf
-[backup]
-type = s3
-provider = Cloudflare
-access_key_id = ${RCLONE_CONFIG_BACKUP_ACCESS_KEY_ID}
-secret_access_key = ${RCLONE_CONFIG_BACKUP_SECRET_ACCESS_KEY}
-region = auto
-endpoint = ${RCLONE_CONFIG_BACKUP_ENDPOINT}
-bucket_acl = ${RCLONE_CONFIG_BACKUP_BUCKET_ACL}
-EOF
+# バイナリをビルド
+RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o misskey-backup .
 
-# backup script
-COPY ./src/backup.sh /tools/
-COPY ./src/backup-gdrive.sh /tools/
-RUN chmod +x /tools/backup.sh /tools/backup-gdrive.sh && mkdir -p /misskey-data/backups
+# 実行ステージ
+FROM alpine:latest
 
-# crontab
-RUN /etc/init.d/cron start
-COPY ./config/crontab /etc/cron.d/crontab
-RUN chmod 0644 /etc/cron.d/crontab
-RUN crontab /etc/cron.d/backup
+# 必要なパッケージをインストール
+RUN apk add --no-cache \
+    ca-certificates \
+    tzdata \
+    postgresql-client \
+    zstd \
+    curl \
+    && rm -rf /var/cache/apk/*
+
+# 非rootユーザーを作成
+RUN addgroup -g 1001 -S appgroup && \
+    adduser -u 1001 -S appuser -G appgroup
+
+# 作業ディレクトリを設定
+WORKDIR /app
+
+# ビルドステージからバイナリをコピー
+COPY --from=builder /app/misskey-backup .
+
+# 設定ファイル用ディレクトリを作成
+RUN mkdir -p /app/config
+
+# 権限を設定
+RUN chown -R appuser:appgroup /app
+
+# ユーザーを切り替え
+USER appuser
+
+# ヘルスチェック
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:8080/health || exit 1
+
+# ポートを公開（必要に応じて）
+EXPOSE 8080
+
+# アプリケーションを実行
+CMD ["./misskey-backup"]

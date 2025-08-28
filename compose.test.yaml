@@ -1,0 +1,47 @@
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: misskey-postgres-test
+    environment:
+      POSTGRES_DB: mk1
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: testpassword
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./test-data.sql:/docker-entrypoint-initdb.d/test-data.sql:ro
+    networks:
+      - misskey-test
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d mk1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backup:
+    build:
+      context: ./src
+      dockerfile: ../Dockerfile
+    container_name: misskey-backup-test
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      TZ: Asia/Tokyo
+    env_file:
+      - ./config/.env
+    volumes:
+      - mi-backups:/app/backups
+      - ./config:/app/config:ro
+    networks:
+      - misskey-test
+    command: ["./misskey-backup"]
+
+networks:
+  misskey-test:
+    driver: bridge
+
+volumes:
+  postgres-data:
+  mi-backups:

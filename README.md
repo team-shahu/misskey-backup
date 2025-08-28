@@ -1,26 +1,107 @@
-# misskey-backup
-postgreSQLのバックアップをよしなに取るためのスクリプト  
-  
-## 使い方
-1. `git clone https://github.com/team-shahu/misskey-backup.git`  
-2. `cd misskey-backup`  
-3. `cp ./config/.env.example ./config/.env && cp ./config/crontab.example ./config/crontab`  
-4. `./config/.env`を編集  
-4. `./config/crontab`を編集  
-5. (バックアップ先としてGoogle Driveを併用する場合)  
-    1. [LOCAL] [この手順](https://github.com/glotlabs/gdrive/blob/main/docs/create_google_api_credentials.md)に従ってGoogle Drive APIの認証情報を取得  
-    2. [LOCAL] [gdriveを導入](https://github.com/glotlabs/gdrive/blob/main/docs/create_google_api_credentials.md)  
-    3. [LOCAL] `gdrive account add`を実行して[認証情報を登録](https://github.com/glotlabs/gdrive/blob/main/docs/create_google_api_credentials.md)  
-    4. [LOCAL] `account=$(gdrive account list) && gdrive account export ${account}`を実行して認証情報を.tar形式でエクスポート  
-    5. [REMOTE] エクスポートしたファイルを./config/配下に配置  
-    6. [REMOTE] `./config/.env`の`GDRIVE_ACCOUNT_FILE`にエクスポートしたファイル名、`GDRIVE_PARENT_ID`にバックアップ先のGoogle DriveのフォルダIDを記述  
-    7. [REMOTE] `./config/.env`の`GOOGLE_DRIVE_BACKUP`を`true`に変更  
-    8. [REMOTE] `./config/crontab`を編集。指定の場所のコメントアウトを外す。  
-6. `docker compose up -d --build`  
-  
+# Misskey Backup Service
 
-> [!NOTE]
-> ネットワークがない旨のエラーが発生することがあります。以下のコマンドを実行し、ネットワークを作成後、再度`docker compose up -d --build`を実行してください。
-> ```bash
-> docker network create misskey-backup_default
-> ```
+MisskeyのPostgreSQLデータベースを自動バックアップし、Cloudflare R2ストレージに保存するGoアプリケーションです。
+
+## 機能
+
+- **PostgreSQLバックアップ**: `pg_dump`を使用したカスタム形式でのデータベースダンプ
+- **ファイル圧縮**: `zstd`による高効率な圧縮
+- **クラウドストレージ**: Cloudflare R2への自動アップロード
+- **スケジュール実行**: Cron形式での自動バックアップ実行
+- **通知機能**: Discord Webhookによるバックアップ結果通知
+- **古いバックアップの自動削除**: 設定可能な保持期間
+
+## 前提条件
+
+- Docker & Docker Compose
+- Cloudflare R2アカウントとバケット
+- PostgreSQLデータベースへのアクセス権限
+
+## セットアップ
+
+### 1. リポジトリのクローン
+
+```bash
+git clone <repository-url>
+cd misskey-backup
+```
+
+### 2. 環境変数の設定
+
+```bash
+cp config/env.example config/.env
+```
+`config/.env`ファイルを編集して、設定を行ってください：
+
+
+## 設定項目
+
+### PostgreSQL設定
+
+| 項目 | 説明 | デフォルト値 |
+|------|------|-------------|
+| `POSTGRES_HOST` | PostgreSQLホスト | `localhost` |
+| `POSTGRES_PORT` | PostgreSQLポート | `5432` |
+| `POSTGRES_USER` | データベースユーザー | `postgres` |
+| `POSTGRES_PASSWORD` | データベースパスワード | - |
+| `POSTGRES_DB` | データベース名 | `misskey` |
+
+### バックアップ設定
+
+| 項目 | 説明 | デフォルト値 |
+|------|------|-------------|
+| `BACKUP_DIR` | バックアップ保存ディレクトリ | `/app/backups` |
+| `BACKUP_RETENTION` | バックアップ保持日数 | `30` |
+| `COMPRESSION_LEVEL` | zstd圧縮レベル (1-19) | `3` |
+
+### Cloudflare R2設定
+
+| 項目 | 説明 |
+|------|------|
+| `BACKUP_ENDPOINT` | R2エンドポイントURL |
+| `BACKUP_ACCESS_KEY_ID` | R2アクセスキーID |
+| `BACKUP_SECRET_ACCESS_KEY` | R2シークレットアクセスキー |
+| `R2_BUCKET_NAME` | R2バケット名 |
+| `R2_PREFIX` | バックアップファイルのプレフィックス |
+| `BACKUP_BUCKET_ACL` | バケットのACL設定 |
+
+### スケジューラー設定
+
+| 項目 | 説明 | デフォルト値 |
+|------|------|-------------|
+| `CRON_SCHEDULE` | Cron形式のスケジュール | `0 5,17 * * *` |
+| `TZ` | タイムゾーン | `Asia/Tokyo` |
+
+## バックアップファイル
+
+バックアップファイルは以下の形式で保存されます：
+
+```
+{データベース名}_{日付}_{時刻}.dump.zst
+```
+
+例: `misskey_2025-08-28_21-35.dump.zst`
+
+## ログ
+
+アプリケーションは以下の情報をログに出力します：
+
+- バックアップの開始と完了
+- ファイルサイズと実行時間
+- エラーが発生した場合は詳細なエラーメッセージ
+- R2アップロードの結果
+
+
+## ライセンス
+
+このプロジェクトはMITライセンスの下で公開されています。
+
+## 貢献
+
+プルリクエストやイシューの報告を歓迎します。貢献する前に、以下の手順を確認してください：
+
+1. フォークを作成
+2. 機能ブランチを作成 (`git checkout -b feature/amazing-feature`)
+3. 変更をコミット (`git commit -m 'feat: 機能追加の概要'`)
+4. ブランチにプッシュ (`git push origin feature/amazing-feature`)
+5. プルリクエストを作成
