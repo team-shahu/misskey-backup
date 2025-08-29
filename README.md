@@ -1,5 +1,8 @@
 # Misskey Backup Service
 
+> [!WARNING]
+> **Google Driveサポートの廃止**: このツールはGolangで再実装された際に、Google Driveへのアップロード機能をサポートしなくなりました。現在はCloudflare R2ストレージのみをサポートしています。
+
 MisskeyのPostgreSQLデータベースを自動バックアップし、Cloudflare R2ストレージに保存するGoアプリケーションです。
 
 ## 機能
