@@ -19,6 +19,7 @@ type Config struct {
 	BackupDir        string
 	BackupRetention  int
 	CompressionLevel int
+	EncryptionKey    string
 
 	// Cloudflare R2設定
 	R2Endpoint        string
@@ -65,6 +66,7 @@ func Load() (*Config, error) {
 		BackupDir:         getEnv("BACKUP_DIR", "/app/backups"),
 		BackupRetention:   getEnvAsInt("BACKUP_RETENTION", 30),
 		CompressionLevel:  getEnvAsInt("COMPRESSION_LEVEL", 3),
+		EncryptionKey:     getEnv("BACKUP_ENCRYPTION_KEY", ""),
 		R2Endpoint:        getEnv("BACKUP_ENDPOINT", ""),
 		R2AccessKeyID:     getEnv("BACKUP_ACCESS_KEY_ID", ""),
 		R2SecretAccessKey: getEnv("BACKUP_SECRET_ACCESS_KEY", ""),

@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"io"
 	"math"
-	"math/rand"
+	mathrand "math/rand"
 	"os"
 	"path"
 	"sync"
@@ -91,7 +91,7 @@ func (r *R2Storage) exponentialBackoff(attempt int) time.Duration {
 	}
 
 	// Add jitter (±25%)
-	jitter := delay * 0.25 * (rand.Float64()*2 - 1)
+	jitter := delay * 0.25 * (mathrand.Float64()*2 - 1)
 	delay += jitter
 
 	return time.Duration(delay)

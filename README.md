@@ -32,6 +32,11 @@ cd misskey-backup
 
 ### 2. 環境変数の設定
 
+ファイルの暗号化を利用する場合、暗号化キー用の文字列を生成します。
+```bash
+openssl rand -hex 32
+```
+
 ```bash
 cp config/env.example config/.env
 ```
@@ -57,6 +62,7 @@ cp config/env.example config/.env
 | `BACKUP_DIR` | バックアップ保存ディレクトリ | `/app/backups` |
 | `BACKUP_RETENTION` | バックアップ保持日数 | `30` |
 | `COMPRESSION_LEVEL` | zstd圧縮レベル (1-19) | `3` |
+| `BACKUP_ENCRYPTION_KEY` | バックアップ暗号化に使用するキー (32バイト以上) | - |
 
 ### Cloudflare R2設定
 
@@ -97,10 +103,24 @@ cp config/env.example config/.env
 バックアップファイルは以下の形式で保存されます：
 
 ```
-{データベース名}_{日付}_{時刻}.dump.zst
+{データベース名}_{日付}_{時刻}.dump.zst.enc
 ```
 
-例: `misskey_2025-08-28_21-35.dump.zst`
+例: `misskey_2025-08-28_21-35.dump.zst.enc`
+
+
+
+## CLIコマンドで復元する
+
+R2のPublic URL(または事前に取得したダウンロードURL)を指定して、暗号化済みバックアップを復元できます。
+
+```bash
+cd src
+BACKUP_ENCRYPTION_KEY=... go run . --restore-url "https://backup.example.com/path/to/misskey_2025-08-28_21-35.dump.zst.enc"
+```
+
+- バックアップは`BACKUP_DIR`配下に保存され、最終的に`.dump`が出力されます。
+- 必須: `BACKUP_ENCRYPTION_KEY`（バックアップ作成時と同じ鍵）
 
 ## ログ
 

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"flag"
 	"log"
 	"os"
 	"os/signal"
@@ -18,6 +19,11 @@ import (
 )
 
 func main() {
+	restoreURL := flag.String("restore-url", "", "復元するバックアップのダウンロードURL (.enc)")
+	encryptionKey := flag.String("encryption-key", "", "バックアップ暗号化キー（指定時は環境変数より優先）")
+	flag.Parse()
+	restoreOnly := *restoreURL != ""
+
 	// パニックリカバリー
 	defer func() {
 		if r := recover(); r != nil {
@@ -39,6 +45,12 @@ func main() {
 		logrus.Fatalf("Failed to load config: %v", err)
 	}
 
+	// 暗号化キーのCLI指定があれば優先
+	if encryptionKey != nil && *encryptionKey != "" {
+		cfg.EncryptionKey = *encryptionKey
+		logrus.Info("Using encryption key from CLI option")
+	}
+
 	// デバッグモードの設定
 	if cfg.Debug {
 		logrus.SetLevel(logrus.DebugLevel)
@@ -46,13 +58,26 @@ func main() {
 	}
 
 	// バックアップサービス初期化
-	backupService, err := backup.NewService(cfg)
+	backupService, err := backup.NewService(cfg, restoreOnly)
 	if err != nil {
 		logrus.Fatalf("Failed to create backup service: %v", err)
 	}
 
 	// 通知サービス初期化
 	notificationService := notification.NewService(cfg)
+
+	// 復元モード（URL指定時）
+	if restoreOnly {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Hour)
+		defer cancel()
+
+		restoredPath, err := backupService.RetrieveBackupFromURL(ctx, *restoreURL)
+		if err != nil {
+			logrus.Fatalf("Failed to restore backup: %v", err)
+		}
+		logrus.Infof("Restored backup: %s", restoredPath)
+		return
+	}
 
 	// スケジューラー初期化
 	scheduler := scheduler.NewScheduler(backupService, notificationService, cfg)

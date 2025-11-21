@@ -1,6 +1,6 @@
 services:
   postgres:
-    image: postgres:15-alpine
+    image: groonga/pgroonga:latest-debian-17
     container_name: misskey-postgres-test
     environment:
       POSTGRES_DB: mk1
