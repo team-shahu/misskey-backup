@@ -3,6 +3,8 @@ name: Docker Build and Push
 on:
   push:
     branches: [ main ]
+    paths:
+      - 'src/**'
   workflow_dispatch:
     inputs:
       tag:
