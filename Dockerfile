@@ -23,10 +23,10 @@ RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o misskey-backup .
 FROM alpine:latest
 
 # 必要なパッケージをインストール
-RUN apk add --no-cache \
+RUN apk add --no-cache --repository=https://dl-cdn.alpinelinux.org/alpine/edge/main \
     ca-certificates \
     tzdata \
-    postgresql-client \
+    postgresql18-client \
     zstd \
     curl \
     && rm -rf /var/cache/apk/*

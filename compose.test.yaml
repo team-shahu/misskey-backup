@@ -21,8 +21,7 @@ services:
 
   backup:
     build:
-      context: ./src
-      dockerfile: ../Dockerfile
+      context: .
     container_name: misskey-backup-test
     depends_on:
       postgres:
