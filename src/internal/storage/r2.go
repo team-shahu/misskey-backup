@@ -6,8 +6,10 @@ import (
 	"io"
 	"math"
 	mathrand "math/rand"
+	"net/url"
 	"os"
 	"path"
+	"strings"
 	"sync"
 	"time"
 
@@ -155,23 +157,14 @@ func NewR2Storage(cfg *config.Config) (*R2Storage, error) {
 		return nil, fmt.Errorf("R2 configuration is incomplete")
 	}
 
-	// エンドポイントからアカウントIDを抽出
-	// 例: https://a8e8211c674c2b00f3a8996b65b56447.r2.cloudflarestorage.com
-	// から a8e8211c674c2b00f3a8996b65b56447 を抽出
-	endpointURL := cfg.R2Endpoint
-	accountID := ""
-	if len(endpointURL) > 0 {
-		// https:// を除去
-		if len(endpointURL) > 8 && endpointURL[:8] == "https://" {
-			accountID = endpointURL[8:]
-		}
-		// .r2.cloudflarestorage.com を除去
-		if len(accountID) > 25 && accountID[len(accountID)-25:] == ".r2.cloudflarestorage.com" {
-			accountID = accountID[:len(accountID)-25]
-		}
+	// エンドポイントURLのホスト名からアカウントIDを抽出
+	// 例: https://<accountID>.r2.cloudflarestorage.com
+	parsed, err := url.Parse(cfg.R2Endpoint)
+	if err != nil || parsed.Host == "" {
+		return nil, fmt.Errorf("invalid R2 endpoint format: %s", cfg.R2Endpoint)
 	}
-
-	if accountID == "" {
+	accountID := strings.TrimSuffix(parsed.Host, ".r2.cloudflarestorage.com")
+	if accountID == "" || accountID == parsed.Host {
 		return nil, fmt.Errorf("invalid R2 endpoint format: %s", cfg.R2Endpoint)
 	}
 
