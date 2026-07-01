@@ -68,7 +68,7 @@ func (s *Service) NotifyBackupSuccess(ctx context.Context, result *backup.Backup
 
 	embed := DiscordEmbed{
 		Title:       "✅ バックアップが完了しました。",
-		Description: "PostgreSQLのバックアップが正常に完了しました",
+		Description: fmt.Sprintf("%sのバックアップが正常に完了しました", result.Target),
 		Color:       5620992, // 緑色
 		Timestamp:   time.Now().Format(time.RFC3339),
 		Fields: []DiscordEmbedField{
@@ -105,14 +105,14 @@ func (s *Service) NotifyBackupSuccess(ctx context.Context, result *backup.Backup
 	return s.sendDiscordWebhook(ctx, embed)
 }
 
-func (s *Service) NotifyBackupFailure(ctx context.Context, err error, duration time.Duration) error {
+func (s *Service) NotifyBackupFailure(ctx context.Context, target string, err error, duration time.Duration) error {
 	if !s.config.Notification || s.config.DiscordWebhookURL == "" {
 		return nil
 	}
 
 	embed := DiscordEmbed{
 		Title:       "❌ バックアップに失敗しました。",
-		Description: "PostgreSQLのバックアップが異常終了しました。ログを確認してください。",
+		Description: fmt.Sprintf("%sのバックアップが異常終了しました。ログを確認してください。", target),
 		Color:       15548997, // 赤色
 		Timestamp:   time.Now().Format(time.RFC3339),
 		Fields: []DiscordEmbedField{

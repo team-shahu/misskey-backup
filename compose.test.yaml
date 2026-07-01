@@ -19,12 +19,27 @@ services:
       timeout: 5s
       retries: 5
 
+  redis:
+    image: redis:7-alpine
+    container_name: misskey-redis-test
+    ports:
+      - "6379:6379"
+    networks:
+      - misskey-test
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   backup:
     build:
       context: .
     container_name: misskey-backup-test
     depends_on:
       postgres:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     environment:
       TZ: Asia/Tokyo

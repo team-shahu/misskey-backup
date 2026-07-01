@@ -8,12 +8,22 @@ import (
 )
 
 type Config struct {
+	// バックアップ対象トグル
+	PostgresEnabled bool
+	RedisEnabled    bool
+
 	// PostgreSQL設定
 	PostgresHost     string
 	PostgresPort     int
 	PostgresUser     string
 	PostgresPassword string
 	PostgresDB       string
+
+	// Redis設定
+	RedisHost     string
+	RedisPort     int
+	RedisPassword string
+	RedisTLS      bool
 
 	// バックアップ設定
 	BackupDir         string
@@ -59,11 +69,17 @@ func Load() (*Config, error) {
 	}
 
 	cfg := &Config{
+		PostgresEnabled:   getEnvAsBool("POSTGRES_BACKUP_ENABLED", true),
+		RedisEnabled:      getEnvAsBool("REDIS_BACKUP_ENABLED", true),
 		PostgresHost:      getEnv("POSTGRES_HOST", "localhost"),
 		PostgresPort:      getEnvAsInt("POSTGRES_PORT", 5432),
 		PostgresUser:      getEnv("POSTGRES_USER", "postgres"),
 		PostgresPassword:  getEnv("POSTGRES_PASSWORD", ""),
 		PostgresDB:        getEnv("POSTGRES_DB", "misskey"),
+		RedisHost:         getEnv("REDIS_HOST", "redis"),
+		RedisPort:         getEnvAsInt("REDIS_PORT", 6379),
+		RedisPassword:     getEnv("REDIS_PASSWORD", ""),
+		RedisTLS:          getEnvAsBool("REDIS_TLS", false),
 		BackupDir:         getEnv("BACKUP_DIR", "/app/backups"),
 		BackupGenerations: getEnvAsInt("BACKUP_GENERATIONS", 30),
 		CompressionLevel:  getEnvAsInt("COMPRESSION_LEVEL", 3),

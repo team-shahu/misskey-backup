@@ -45,6 +45,10 @@ func TestGetEnvAsBool(t *testing.T) {
 func TestLoadDefaults(t *testing.T) {
 	os.Unsetenv("POSTGRES_PORT")
 	os.Unsetenv("CRON_SCHEDULE")
+	os.Unsetenv("POSTGRES_BACKUP_ENABLED")
+	os.Unsetenv("REDIS_BACKUP_ENABLED")
+	os.Unsetenv("REDIS_HOST")
+	os.Unsetenv("REDIS_PORT")
 	cfg, err := Load()
 	if err != nil {
 		t.Fatal(err)
@@ -54,5 +58,18 @@ func TestLoadDefaults(t *testing.T) {
 	}
 	if cfg.CronSchedule == "" {
 		t.Error("CronSchedule should have a default")
+	}
+	// PostgresもRedisもデフォルト有効
+	if !cfg.PostgresEnabled {
+		t.Error("PostgresEnabled should default true")
+	}
+	if !cfg.RedisEnabled {
+		t.Error("RedisEnabled should default true")
+	}
+	if cfg.RedisHost != "redis" {
+		t.Errorf("RedisHost default: %q", cfg.RedisHost)
+	}
+	if cfg.RedisPort != 6379 {
+		t.Errorf("RedisPort default: %d", cfg.RedisPort)
 	}
 }

@@ -30,6 +30,7 @@ type Service struct {
 }
 
 type BackupResult struct {
+	Target      string // "PostgreSQL" / "Redis"
 	Success     bool
 	FileName    string
 	FileSize    int64
@@ -100,89 +101,119 @@ func NewService(cfg *config.Config, restoreOnly bool) (*Service, error) {
 	}, nil
 }
 
-func (s *Service) CreateBackup(ctx context.Context) (*BackupResult, error) {
+// CreateBackup 有効なターゲットを順に実行し各結果を返す
+// 片方のターゲットが失敗しても他方は続行(結果に個別のSuccess/Errorを記録)
+func (s *Service) CreateBackup(ctx context.Context) ([]*BackupResult, error) {
 	if s.storage == nil {
 		return nil, fmt.Errorf("storage is not initialized")
 	}
-
-	startTime := time.Now()
-	result := &BackupResult{}
 
 	// バックアップディレクトリの作成
 	if err := s.ensureBackupDir(); err != nil {
 		return nil, err
 	}
 
-	// バックアップファイル名の生成
+	var results []*BackupResult
+	if s.config.PostgresEnabled {
+		results = append(results, s.backupPostgres(ctx))
+	}
+	if s.config.RedisEnabled {
+		results = append(results, s.backupRedis(ctx))
+	}
+
+	if len(results) == 0 {
+		return nil, fmt.Errorf("no backup target enabled (POSTGRES_BACKUP_ENABLED / REDIS_BACKUP_ENABLED)")
+	}
+
+	return results, nil
+}
+
+// backupPostgres PostgreSQLをダンプ→検証し共通パイプラインで仕上げる
+func (s *Service) backupPostgres(ctx context.Context) *BackupResult {
+	result := &BackupResult{Target: "PostgreSQL"}
+	startTime := time.Now()
+
 	timestamp := time.Now().Format("2006-01-02_15-04")
-	backupFileName := fmt.Sprintf("%s_%s.dump", s.config.PostgresDB, timestamp)
-	backupFilePath := filepath.Join(s.config.BackupDir, backupFileName)
-	compressedFilePath := backupFilePath + ".zst"
-	encryptedFilePath := compressedFilePath + ".enc"
+	rawPath := filepath.Join(s.config.BackupDir, fmt.Sprintf("%s_%s.dump", s.config.PostgresDB, timestamp))
+	defer os.Remove(rawPath)
 
-	defer func() {
-		// 一時ファイルの削除
-		os.Remove(backupFilePath)
-		os.Remove(compressedFilePath)
-		os.Remove(encryptedFilePath)
-	}()
-
-	// PostgreSQLバックアップの実行
-	if err := s.createPostgresBackup(ctx, backupFilePath); err != nil {
-		result.Success = false
-		result.Error = fmt.Errorf("failed to create PostgreSQL backup: %w", err)
-		return result, result.Error
+	if err := s.createPostgresBackup(ctx, rawPath); err != nil {
+		return failResult(result, startTime, fmt.Errorf("failed to create PostgreSQL backup: %w", err))
+	}
+	if err := s.verifyDump(ctx, rawPath); err != nil {
+		return failResult(result, startTime, fmt.Errorf("failed to verify backup: %w", err))
 	}
 
-	// ダンプ健全性検証
-	if err := s.verifyDump(ctx, backupFilePath); err != nil {
-		result.Success = false
-		result.Error = fmt.Errorf("failed to verify backup: %w", err)
-		return result, result.Error
+	// バックアップ命名規則に一致するファイルのみ世代整理対象
+	nameRe := regexp.MustCompile(fmt.Sprintf(
+		`^%s_\d{4}-\d{2}-\d{2}_\d{2}-\d{2}\.dump\.zst(\.enc)?$`,
+		regexp.QuoteMeta(s.config.PostgresDB)))
+
+	return s.finalizeBackup(ctx, result, startTime, rawPath, nameRe)
+}
+
+// backupRedis RedisをRDB取得→検証し共通パイプラインで仕上げる
+func (s *Service) backupRedis(ctx context.Context) *BackupResult {
+	result := &BackupResult{Target: "Redis"}
+	startTime := time.Now()
+
+	timestamp := time.Now().Format("2006-01-02_15-04")
+	rawPath := filepath.Join(s.config.BackupDir, fmt.Sprintf("redis_%s.rdb", timestamp))
+	defer os.Remove(rawPath)
+
+	if err := s.createRedisBackup(ctx, rawPath); err != nil {
+		return failResult(result, startTime, fmt.Errorf("failed to create Redis backup: %w", err))
 	}
+	if err := s.verifyRDB(ctx, rawPath); err != nil {
+		return failResult(result, startTime, fmt.Errorf("failed to verify backup: %w", err))
+	}
+
+	nameRe := regexp.MustCompile(`^redis_\d{4}-\d{2}-\d{2}_\d{2}-\d{2}\.rdb\.zst(\.enc)?$`)
+
+	return s.finalizeBackup(ctx, result, startTime, rawPath, nameRe)
+}
+
+// finalizeBackup 生ダンプを圧縮→(暗号化)→アップロード→当該ターゲットの世代整理
+func (s *Service) finalizeBackup(ctx context.Context, result *BackupResult, startTime time.Time, rawPath string, nameRe *regexp.Regexp) *BackupResult {
+	compressedPath := rawPath + ".zst"
+	encryptedPath := compressedPath + ".enc"
+	defer os.Remove(compressedPath)
+	defer os.Remove(encryptedPath)
 
 	// ファイルの圧縮
-	if err := s.compressFile(ctx, backupFilePath, compressedFilePath); err != nil {
-		result.Success = false
-		result.Error = fmt.Errorf("failed to compress backup file: %w", err)
-		return result, result.Error
+	if err := s.compressFile(ctx, rawPath, compressedPath); err != nil {
+		return failResult(result, startTime, fmt.Errorf("failed to compress backup file: %w", err))
 	}
 
 	// キーがある場合は暗号化
 	if s.config.EncryptionKey != "" {
-		if err := storage.EncryptFile(compressedFilePath, encryptedFilePath, s.encKey, s.hmacKey); err != nil {
-			result.Success = false
-			result.Error = fmt.Errorf("failed to encrypt backup file: %w", err)
-			return result, result.Error
+		if err := storage.EncryptFile(compressedPath, encryptedPath, s.encKey, s.hmacKey); err != nil {
+			return failResult(result, startTime, fmt.Errorf("failed to encrypt backup file: %w", err))
 		}
 	}
 
 	// 暗号化有無で使用ファイルと拡張子を確定
-	useFilePath := compressedFilePath
+	useFilePath := compressedPath
 	extension := ".zst"
 	if s.config.EncryptionKey != "" {
-		useFilePath = encryptedFilePath
+		useFilePath = encryptedPath
 		extension = ".zst.enc"
 	}
-	remoteName := backupFileName + extension
+	remoteName := filepath.Base(rawPath) + extension
 
 	fileInfo, err := os.Stat(useFilePath)
 	if err != nil {
-		result.Success = false
-		result.Error = fmt.Errorf("failed to get file info: %w", err)
-		return result, result.Error
+		return failResult(result, startTime, fmt.Errorf("failed to get file info: %w", err))
 	}
 
 	// ストレージへのアップロード
 	downloadURL, err := s.storage.Upload(ctx, useFilePath, remoteName)
 	if err != nil {
-		result.Success = false
-		result.Error = fmt.Errorf("failed to upload to storage: %w", err)
-		return result, result.Error
+		return failResult(result, startTime, fmt.Errorf("failed to upload to storage: %w", err))
 	}
 
 	// 古いバックアップの削除
-	if err := s.cleanupOldBackups(ctx); err != nil {
+	if err := s.cleanupOldBackups(ctx, nameRe); err != nil {
 		logrus.Warnf("Failed to cleanup old backups: %v", err)
 	}
 
@@ -192,10 +223,19 @@ func (s *Service) CreateBackup(ctx context.Context) (*BackupResult, error) {
 	result.Duration = time.Since(startTime)
 	result.DownloadURL = downloadURL
 
-	logrus.Infof("Backup completed successfully: %s (%.2f MB, %v)",
-		result.FileName, float64(result.FileSize)/1024/1024, result.Duration)
+	logrus.Infof("%s backup completed successfully: %s (%.2f MB, %v)",
+		result.Target, result.FileName, float64(result.FileSize)/1024/1024, result.Duration)
 
-	return result, nil
+	return result
+}
+
+// failResult 失敗結果を組み立ててログ出力
+func failResult(result *BackupResult, startTime time.Time, err error) *BackupResult {
+	result.Success = false
+	result.Error = err
+	result.Duration = time.Since(startTime)
+	logrus.Errorf("%s backup failed: %v", result.Target, err)
+	return result
 }
 
 func (s *Service) ensureBackupDir() error {
@@ -238,6 +278,45 @@ func (s *Service) verifyDump(ctx context.Context, filePath string) error {
 	return cmd.Run()
 }
 
+// buildRedisCliArgs redis-cli --rdbの引数を組み立て
+func (s *Service) buildRedisCliArgs(filePath string) []string {
+	args := []string{
+		"-h", s.config.RedisHost,
+		"-p", strconv.Itoa(s.config.RedisPort),
+	}
+	if s.config.RedisTLS {
+		args = append(args, "--tls")
+	}
+	// --rdbはファイル出力。全DB含む完全スナップショット
+	args = append(args, "--rdb", filePath)
+	return args
+}
+
+// createRedisBackup redis-cli --rdbでRDBスナップショットを取得
+// パスワードはREDISCLI_AUTHで渡しプロセス一覧への露出を防ぐ(PGPASSWORDと同様)
+func (s *Service) createRedisBackup(ctx context.Context, filePath string) error {
+	cmd := exec.CommandContext(ctx, "redis-cli", s.buildRedisCliArgs(filePath)...)
+	cmd.Env = os.Environ()
+	if s.config.RedisPassword != "" {
+		cmd.Env = append(cmd.Env, "REDISCLI_AUTH="+s.config.RedisPassword)
+	}
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	logrus.Infof("Creating Redis backup: %s", filePath)
+	return cmd.Run()
+}
+
+// verifyRDB redis-check-rdbでRDB健全性を検証(pg_restore --listのRedis版)
+func (s *Service) verifyRDB(ctx context.Context, filePath string) error {
+	cmd := exec.CommandContext(ctx, "redis-check-rdb", filePath)
+	cmd.Stdout = io.Discard
+	cmd.Stderr = os.Stderr
+
+	logrus.Infof("Verifying backup dump: %s", filePath)
+	return cmd.Run()
+}
+
 func (s *Service) compressFile(ctx context.Context, inputPath, outputPath string) error {
 	cmd := exec.CommandContext(ctx, "zstd", "-f", "-"+fmt.Sprintf("%d", s.config.CompressionLevel), inputPath, "-o", outputPath)
 	cmd.Stdout = os.Stdout
@@ -247,18 +326,14 @@ func (s *Service) compressFile(ctx context.Context, inputPath, outputPath string
 	return cmd.Run()
 }
 
-func (s *Service) cleanupOldBackups(ctx context.Context) error {
+// cleanupOldBackups nameReに一致するバックアップを世代数分だけ残し古い順に削除
+func (s *Service) cleanupOldBackups(ctx context.Context, nameRe *regexp.Regexp) error {
 	// 保持世代数が未設定なら誤削除防止のためスキップ
 	keep := s.config.BackupGenerations
 	if keep <= 0 {
 		logrus.Warnf("BackupGenerations=%d, skip cleanup", keep)
 		return nil
 	}
-
-	// バックアップ命名規則に一致するファイルのみ対象
-	nameRe := regexp.MustCompile(fmt.Sprintf(
-		`^%s_\d{4}-\d{2}-\d{2}_\d{2}-\d{2}\.dump\.zst(\.enc)?$`,
-		regexp.QuoteMeta(s.config.PostgresDB)))
 
 	files, err := s.storage.List(ctx, "")
 	if err != nil {

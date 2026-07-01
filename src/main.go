@@ -20,7 +20,7 @@ import (
 )
 
 func main() {
-	restoreURL := flag.String("restore-url", "", "復元するバックアップのダウンロードURL (.enc)")
+	restoreURL := flag.String("restore-url", "", "復元するバックアップのダウンロードURL (.dump/.rdb系の.enc)")
 	encryptionKey := flag.String("encryption-key", "", "バックアップ暗号化キー（指定時は環境変数より優先）")
 	flag.Parse()
 	restoreOnly := *restoreURL != ""
