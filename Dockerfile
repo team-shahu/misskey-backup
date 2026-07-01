@@ -20,16 +20,10 @@ COPY src/ .
 RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o misskey-backup .
 
 # 実行ステージ
-FROM alpine:latest
+# pg18クライアント同梱の公式イメージを使いedgeリポジトリ依存を排除
+FROM postgres:18-alpine
 
-# 必要なパッケージをインストール
-RUN apk add --no-cache --repository=https://dl-cdn.alpinelinux.org/alpine/edge/main \
-    ca-certificates \
-    tzdata \
-    postgresql18-client \
-    zstd \
-    curl \
-    && rm -rf /var/cache/apk/*
+RUN apk add --no-cache ca-certificates tzdata zstd curl
 
 # 非rootユーザーを作成
 RUN addgroup -g 1001 -S appgroup && \
@@ -61,4 +55,6 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
 EXPOSE 8080
 
 # アプリケーションを実行
+# ベースイメージのentrypointを打ち消しアプリ直接起動
+ENTRYPOINT []
 CMD ["./misskey-backup"]
