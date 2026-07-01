@@ -86,7 +86,7 @@ func (s *Service) NotifyBackupSuccess(ctx context.Context, result *backup.Backup
 	}
 
 	// ダウンロードURLを追加
-	if result.DownloadURL != "" {
+	if s.config.NotifyIncludeURL && result.DownloadURL != "" {
 		embed.Fields = append(embed.Fields, DiscordEmbedField{
 			Name:   ":link: ダウンロードURL",
 			Value:  result.DownloadURL,

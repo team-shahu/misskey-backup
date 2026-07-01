@@ -45,6 +45,7 @@ type Config struct {
 	// 通知設定
 	Notification      bool
 	DiscordWebhookURL string
+	NotifyIncludeURL  bool
 
 	// スケジューラー設定
 	CronSchedule string
@@ -82,6 +83,7 @@ func Load() (*Config, error) {
 		Debug:             getEnvAsBool("DEBUG", false),
 		Notification:      getEnvAsBool("NOTIFICATION", false),
 		DiscordWebhookURL: getEnv("DISCORD_WEBHOOK_URL", ""),
+		NotifyIncludeURL:  getEnvAsBool("NOTIFY_INCLUDE_URL", true),
 		CronSchedule:      getEnv("CRON_SCHEDULE", "0 5,17 * * *"),
 		Timezone:          getEnv("TZ", "Asia/Tokyo"),
 	}
