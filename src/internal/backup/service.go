@@ -208,7 +208,8 @@ func (s *Service) createPostgresBackup(filePath string) error {
 		s.config.PostgresHost, s.config.PostgresPort, s.config.PostgresUser,
 		s.config.PostgresPassword, s.config.PostgresDB)
 
-	cmd := exec.Command("pg_dump", "-Fc", "-f", filePath, dsn)
+	// -Z0でpg_dump内部圧縮を無効化しzstdに一本化、二重圧縮を回避
+	cmd := exec.Command("pg_dump", "-Fc", "-Z0", "-f", filePath, dsn)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 
