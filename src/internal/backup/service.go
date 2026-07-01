@@ -147,13 +147,15 @@ func (s *Service) CreateBackup(ctx context.Context) (*BackupResult, error) {
 		}
 	}
 
-	// 利用するファイルパスを確定
+	// 暗号化有無で使用ファイルと拡張子を確定
 	useFilePath := compressedFilePath
+	extension := ".zst"
 	if s.config.EncryptionKey != "" {
 		useFilePath = encryptedFilePath
+		extension = ".zst.enc"
 	}
+	remoteName := backupFileName + extension
 
-	// ファイルサイズの取得（暗号化後）
 	fileInfo, err := os.Stat(useFilePath)
 	if err != nil {
 		result.Success = false
@@ -162,7 +164,7 @@ func (s *Service) CreateBackup(ctx context.Context) (*BackupResult, error) {
 	}
 
 	// ストレージへのアップロード
-	downloadURL, err := s.storage.Upload(ctx, encryptedFilePath, backupFileName+".zst.enc")
+	downloadURL, err := s.storage.Upload(ctx, useFilePath, remoteName)
 	if err != nil {
 		result.Success = false
 		result.Error = fmt.Errorf("failed to upload to storage: %w", err)
@@ -174,14 +176,8 @@ func (s *Service) CreateBackup(ctx context.Context) (*BackupResult, error) {
 		logrus.Warnf("Failed to cleanup old backups: %v", err)
 	}
 
-	// 暗号化の有無で拡張子を決定
-	extension := ".zst"
-	if s.config.EncryptionKey != "" {
-		extension = ".zst.enc"
-	}
-
 	result.Success = true
-	result.FileName = backupFileName + extension
+	result.FileName = remoteName
 	result.FileSize = fileInfo.Size()
 	result.Duration = time.Since(startTime)
 	result.DownloadURL = downloadURL
