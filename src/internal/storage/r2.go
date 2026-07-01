@@ -2,10 +2,12 @@ package storage
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"math"
 	mathrand "math/rand"
+	"net"
 	"net/url"
 	"os"
 	"path"
@@ -20,6 +22,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
+	"github.com/aws/smithy-go"
+	smithyhttp "github.com/aws/smithy-go/transport/http"
 	"github.com/sirupsen/logrus"
 )
 
@@ -30,52 +34,37 @@ type R2Storage struct {
 	config     *config.Config
 }
 
-// Retry configuration - デフォルト値
-const (
-	defaultMaxRetries = 5
-	defaultBaseDelay  = 1 * time.Second
-	defaultMaxDelay   = 30 * time.Second
-	// 大きなファイル用のタイムアウト設定（デフォルト）
-	defaultUploadTimeout = 60 * time.Minute // rcloneのデフォルトに合わせて60分
-	// チャンクサイズ（5MB）
-	chunkSize = 5 * 1024 * 1024
-)
+// 大容量ファイル用デフォルトアップロードタイムアウト、rcloneに合わせ60分
+const defaultUploadTimeout = 60 * time.Minute
 
-// isRetryableError checks if the error is retryable
+// isRetryableError HTTPステータス・APIコード・ネットワークタイムアウトでリトライ可否を判定
 func isRetryableError(err error) bool {
 	if err == nil {
 		return false
 	}
 
-	// Check for specific error patterns that are retryable
-	errStr := err.Error()
-
-	// 500 Internal Server Error
-	if errStr == "operation error S3: PutObject, exceeded maximum number of attempts, 3, https response error StatusCode: 500" {
-		return true
+	// HTTPステータスコード
+	var respErr *smithyhttp.ResponseError
+	if errors.As(err, &respErr) {
+		switch respErr.HTTPStatusCode() {
+		case 408, 429, 500, 502, 503, 504:
+			return true
+		}
 	}
 
-	// Generic 500 errors from Cloudflare R2
-	if errStr == "operation error S3: PutObject, exceeded maximum number of attempts, 3, https response error StatusCode: 500, RequestID: , HostID: , api error InternalError: We encountered an internal error. Please try again." {
-		return true
+	// リトライ可能なAPIエラーコード
+	var apiErr smithy.APIError
+	if errors.As(err, &apiErr) {
+		switch apiErr.ErrorCode() {
+		case "InternalError", "SlowDown", "RequestTimeout", "RequestTimeoutException",
+			"ThrottlingException", "RequestThrottled", "ServiceUnavailable":
+			return true
+		}
 	}
 
-	// Check for other common retryable patterns
-	if errStr == "operation error S3: PutObject, exceeded maximum number of attempts, 3, https response error StatusCode: 503" {
-		return true
-	}
-
-	if errStr == "operation error S3: PutObject, exceeded maximum number of attempts, 3, https response error StatusCode: 429" {
-		return true
-	}
-
-	// タイムアウトエラー
-	if errStr == "operation error S3: PutObject, exceeded maximum number of attempts, 3, context deadline exceeded" {
-		return true
-	}
-
-	// ネットワークエラー
-	if errStr == "operation error S3: PutObject, exceeded maximum number of attempts, 3, net/http: TLS handshake timeout" {
+	// ネットワークタイムアウト
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
 		return true
 	}
 
@@ -338,25 +327,26 @@ func (r *R2Storage) uploadMultipart(ctx context.Context, localPath, fullRemotePa
 			}
 			defer file.Close()
 
-			// ファイルの位置を設定
-			_, err = file.Seek(start, 0)
-			if err != nil {
-				errors <- fmt.Errorf("failed to seek file for part %d: %w", partNum, err)
-				return
-			}
-
-			// パートをアップロード
 			partNumberInt32 := int32(partNum)
 			partSizeInt64 := partSize
 
-			uploadPartResp, err := r.client.UploadPart(uploadCtx, &s3.UploadPartInput{
-				Bucket:        aws.String(r.bucketName),
-				Key:           aws.String(fullRemotePath),
-				PartNumber:    &partNumberInt32,
-				UploadId:      uploadID,
-				Body:          io.LimitReader(file, partSize),
-				ContentLength: &partSizeInt64,
-			})
+			// パート単位でリトライ、再試行時は先頭へシーク
+			var uploadPartResp *s3.UploadPartOutput
+			err = r.retryWithBackoff(uploadCtx, func() error {
+				if _, serr := file.Seek(start, 0); serr != nil {
+					return fmt.Errorf("failed to seek: %w", serr)
+				}
+				var perr error
+				uploadPartResp, perr = r.client.UploadPart(uploadCtx, &s3.UploadPartInput{
+					Bucket:        aws.String(r.bucketName),
+					Key:           aws.String(fullRemotePath),
+					PartNumber:    &partNumberInt32,
+					UploadId:      uploadID,
+					Body:          io.LimitReader(file, partSize),
+					ContentLength: &partSizeInt64,
+				})
+				return perr
+			}, fmt.Sprintf("upload part %d/%d", partNum, numParts))
 			if err != nil {
 				errors <- fmt.Errorf("failed to upload part %d: %w", partNum, err)
 				return
@@ -378,12 +368,14 @@ func (r *R2Storage) uploadMultipart(ctx context.Context, localPath, fullRemotePa
 
 	// エラーチェック
 	for err := range errors {
-		// マルチパートアップロードを中止
-		r.client.AbortMultipartUpload(uploadCtx, &s3.AbortMultipartUploadInput{
+		// uploadCtxが失効していても中止できるよう独立コンテキストで実行
+		abortCtx, abortCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		r.client.AbortMultipartUpload(abortCtx, &s3.AbortMultipartUploadInput{
 			Bucket:   aws.String(r.bucketName),
 			Key:      aws.String(fullRemotePath),
 			UploadId: uploadID,
 		})
+		abortCancel()
 		return "", fmt.Errorf("multipart upload failed: %w", err)
 	}
 
@@ -460,38 +452,46 @@ func (r *R2Storage) Delete(ctx context.Context, remotePath string) error {
 func (r *R2Storage) List(ctx context.Context, prefix string) ([]FileInfo, error) {
 	fullPrefix := path.Join(r.prefix, prefix)
 
-	var result *s3.ListObjectsV2Output
-	err := r.retryWithBackoff(ctx, func() error {
-		var err error
-		result, err = r.client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
-			Bucket: aws.String(r.bucketName),
-			Prefix: aws.String(fullPrefix),
-		})
-		return err
-	}, "list objects from R2")
-
-	if err != nil {
-		return nil, fmt.Errorf("failed to list objects after retries: %w", err)
-	}
-
 	var files []FileInfo
-	for _, obj := range result.Contents {
-		// プレフィックスを除去してファイル名を取得
-		fileName := *obj.Key
-		if r.prefix != "" {
-			fileName = fileName[len(r.prefix)+1:] // +1 for the slash
+	var token *string
+	for {
+		var result *s3.ListObjectsV2Output
+		err := r.retryWithBackoff(ctx, func() error {
+			var err error
+			result, err = r.client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
+				Bucket:            aws.String(r.bucketName),
+				Prefix:            aws.String(fullPrefix),
+				ContinuationToken: token,
+			})
+			return err
+		}, "list objects from R2")
+		if err != nil {
+			return nil, fmt.Errorf("failed to list objects after retries: %w", err)
 		}
 
-		var size int64
-		if obj.Size != nil {
-			size = *obj.Size
+		for _, obj := range result.Contents {
+			// プレフィックスを除去してファイル名を取得
+			fileName := *obj.Key
+			if r.prefix != "" && strings.HasPrefix(fileName, r.prefix+"/") {
+				fileName = fileName[len(r.prefix)+1:]
+			}
+
+			var size int64
+			if obj.Size != nil {
+				size = *obj.Size
+			}
+
+			files = append(files, FileInfo{
+				Name:    fileName,
+				Size:    size,
+				ModTime: *obj.LastModified,
+			})
 		}
 
-		files = append(files, FileInfo{
-			Name:    fileName,
-			Size:    size,
-			ModTime: *obj.LastModified,
-		})
+		if result.IsTruncated == nil || !*result.IsTruncated {
+			break
+		}
+		token = result.NextContinuationToken
 	}
 
 	return files, nil
