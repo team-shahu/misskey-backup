@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -125,7 +126,7 @@ func (s *Service) CreateBackup(ctx context.Context) (*BackupResult, error) {
 	}()
 
 	// PostgreSQLバックアップの実行
-	if err := s.createPostgresBackup(backupFilePath); err != nil {
+	if err := s.createPostgresBackup(ctx, backupFilePath); err != nil {
 		result.Success = false
 		result.Error = fmt.Errorf("failed to create PostgreSQL backup: %w", err)
 		return result, result.Error
@@ -201,12 +202,19 @@ func (s *Service) ensureBackupDir() error {
 	return nil
 }
 
-func (s *Service) createPostgresBackup(filePath string) error {
-	dsn := fmt.Sprintf("host=%s port=%d user=%s password=%s dbname=%s sslmode=disable",
-		s.config.PostgresHost, s.config.PostgresPort, s.config.PostgresUser,
-		s.config.PostgresPassword, s.config.PostgresDB)
-
-	cmd := exec.Command("pg_dump", "-Fc", "-f", filePath, dsn)
+func (s *Service) createPostgresBackup(ctx context.Context, filePath string) error {
+	// パスワードは引数ではなくPGPASSWORDで渡しプロセス一覧への露出を防ぐ
+	cmd := exec.CommandContext(ctx, "pg_dump", "-Fc",
+		"-h", s.config.PostgresHost,
+		"-p", strconv.Itoa(s.config.PostgresPort),
+		"-U", s.config.PostgresUser,
+		"-d", s.config.PostgresDB,
+		"-f", filePath,
+	)
+	cmd.Env = append(os.Environ(),
+		"PGPASSWORD="+s.config.PostgresPassword,
+		"PGSSLMODE=disable",
+	)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 
