@@ -28,16 +28,8 @@ type R2Storage struct {
 	config     *config.Config
 }
 
-// Retry configuration - デフォルト値
-const (
-	defaultMaxRetries = 5
-	defaultBaseDelay  = 1 * time.Second
-	defaultMaxDelay   = 30 * time.Second
-	// 大きなファイル用のタイムアウト設定（デフォルト）
-	defaultUploadTimeout = 60 * time.Minute // rcloneのデフォルトに合わせて60分
-	// チャンクサイズ（5MB）
-	chunkSize = 5 * 1024 * 1024
-)
+// 大容量ファイル用デフォルトアップロードタイムアウト、rcloneに合わせ60分
+const defaultUploadTimeout = 60 * time.Minute
 
 // isRetryableError checks if the error is retryable
 func isRetryableError(err error) bool {
