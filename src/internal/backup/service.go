@@ -10,6 +10,8 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
+	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -132,7 +134,7 @@ func (s *Service) CreateBackup(ctx context.Context) (*BackupResult, error) {
 	}
 
 	// ファイルの圧縮
-	if err := s.compressFile(backupFilePath, compressedFilePath); err != nil {
+	if err := s.compressFile(ctx, backupFilePath, compressedFilePath); err != nil {
 		result.Success = false
 		result.Error = fmt.Errorf("failed to compress backup file: %w", err)
 		return result, result.Error
@@ -147,13 +149,15 @@ func (s *Service) CreateBackup(ctx context.Context) (*BackupResult, error) {
 		}
 	}
 
-	// 利用するファイルパスを確定
+	// 暗号化有無で使用ファイルと拡張子を確定
 	useFilePath := compressedFilePath
+	extension := ".zst"
 	if s.config.EncryptionKey != "" {
 		useFilePath = encryptedFilePath
+		extension = ".zst.enc"
 	}
+	remoteName := backupFileName + extension
 
-	// ファイルサイズの取得（暗号化後）
 	fileInfo, err := os.Stat(useFilePath)
 	if err != nil {
 		result.Success = false
@@ -162,7 +166,7 @@ func (s *Service) CreateBackup(ctx context.Context) (*BackupResult, error) {
 	}
 
 	// ストレージへのアップロード
-	downloadURL, err := s.storage.Upload(ctx, encryptedFilePath, backupFileName+".zst.enc")
+	downloadURL, err := s.storage.Upload(ctx, useFilePath, remoteName)
 	if err != nil {
 		result.Success = false
 		result.Error = fmt.Errorf("failed to upload to storage: %w", err)
@@ -174,14 +178,8 @@ func (s *Service) CreateBackup(ctx context.Context) (*BackupResult, error) {
 		logrus.Warnf("Failed to cleanup old backups: %v", err)
 	}
 
-	// 暗号化の有無で拡張子を決定
-	extension := ".zst"
-	if s.config.EncryptionKey != "" {
-		extension = ".zst.enc"
-	}
-
 	result.Success = true
-	result.FileName = backupFileName + extension
+	result.FileName = remoteName
 	result.FileSize = fileInfo.Size()
 	result.Duration = time.Since(startTime)
 	result.DownloadURL = downloadURL
@@ -206,7 +204,8 @@ func (s *Service) createPostgresBackup(filePath string) error {
 		s.config.PostgresHost, s.config.PostgresPort, s.config.PostgresUser,
 		s.config.PostgresPassword, s.config.PostgresDB)
 
-	cmd := exec.Command("pg_dump", "-Fc", "-f", filePath, dsn)
+	// -Z0でpg_dump内部圧縮を無効化しzstdに一本化、二重圧縮を回避
+	cmd := exec.Command("pg_dump", "-Fc", "-Z0", "-f", filePath, dsn)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 
@@ -214,8 +213,8 @@ func (s *Service) createPostgresBackup(filePath string) error {
 	return cmd.Run()
 }
 
-func (s *Service) compressFile(inputPath, outputPath string) error {
-	cmd := exec.Command("zstd", "-f", "-"+fmt.Sprintf("%d", s.config.CompressionLevel), inputPath, "-o", outputPath)
+func (s *Service) compressFile(ctx context.Context, inputPath, outputPath string) error {
+	cmd := exec.CommandContext(ctx, "zstd", "-f", "-"+fmt.Sprintf("%d", s.config.CompressionLevel), inputPath, "-o", outputPath)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 
@@ -224,21 +223,43 @@ func (s *Service) compressFile(inputPath, outputPath string) error {
 }
 
 func (s *Service) cleanupOldBackups(ctx context.Context) error {
-	// 古いバックアップファイルの削除
-	cutoffDate := time.Now().AddDate(0, 0, -s.config.BackupRetention)
+	// 保持世代数が未設定なら誤削除防止のためスキップ
+	keep := s.config.BackupGenerations
+	if keep <= 0 {
+		logrus.Warnf("BackupGenerations=%d, skip cleanup", keep)
+		return nil
+	}
+
+	// バックアップ命名規則に一致するファイルのみ対象
+	nameRe := regexp.MustCompile(fmt.Sprintf(
+		`^%s_\d{4}-\d{2}-\d{2}_\d{2}-\d{2}\.dump\.zst(\.enc)?$`,
+		regexp.QuoteMeta(s.config.PostgresDB)))
 
 	files, err := s.storage.List(ctx, "")
 	if err != nil {
 		return fmt.Errorf("failed to list files: %w", err)
 	}
 
+	var backups []storage.FileInfo
 	for _, file := range files {
-		if file.ModTime.Before(cutoffDate) {
-			if err := s.storage.Delete(ctx, file.Name); err != nil {
-				logrus.Warnf("Failed to delete old backup %s: %v", file.Name, err)
-			} else {
-				logrus.Infof("Deleted old backup: %s", file.Name)
-			}
+		if nameRe.MatchString(file.Name) {
+			backups = append(backups, file)
+		}
+	}
+
+	// 新しい順に並べ、直近keep件を超えた古い世代を削除
+	sort.Slice(backups, func(i, j int) bool {
+		return backups[i].ModTime.After(backups[j].ModTime)
+	})
+	if len(backups) <= keep {
+		return nil
+	}
+
+	for _, file := range backups[keep:] {
+		if err := s.storage.Delete(ctx, file.Name); err != nil {
+			logrus.Warnf("Failed to delete old backup %s: %v", file.Name, err)
+		} else {
+			logrus.Infof("Deleted old backup: %s", file.Name)
 		}
 	}
 
@@ -246,8 +267,8 @@ func (s *Service) cleanupOldBackups(ctx context.Context) error {
 }
 
 // decompressFile zstdで解凍
-func (s *Service) decompressFile(inputPath, outputPath string) error {
-	cmd := exec.Command("zstd", "-d", "-f", inputPath, "-o", outputPath)
+func (s *Service) decompressFile(ctx context.Context, inputPath, outputPath string) error {
+	cmd := exec.CommandContext(ctx, "zstd", "-d", "-f", inputPath, "-o", outputPath)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 
@@ -321,11 +342,11 @@ func (s *Service) RetrieveBackupFromURL(ctx context.Context, downloadURL string)
 
 	logrus.Infof("Download completed: %s (%.2f MB)", encryptedPath, float64(progress.downloaded)/1024/1024)
 
-	return s.processEncryptedBackup(encryptedPath)
+	return s.processEncryptedBackup(ctx, encryptedPath)
 }
 
 // processEncryptedBackup 暗号化済みファイルを復号→解凍してダンプを返す
-func (s *Service) processEncryptedBackup(encryptedPath string) (string, error) {
+func (s *Service) processEncryptedBackup(ctx context.Context, encryptedPath string) (string, error) {
 	decryptedZstPath := strings.TrimSuffix(encryptedPath, ".enc")
 	restoreDumpPath := strings.TrimSuffix(decryptedZstPath, ".zst")
 
@@ -336,7 +357,7 @@ func (s *Service) processEncryptedBackup(encryptedPath string) (string, error) {
 	}
 	defer os.Remove(decryptedZstPath)
 
-	if err := s.decompressFile(decryptedZstPath, restoreDumpPath); err != nil {
+	if err := s.decompressFile(ctx, decryptedZstPath, restoreDumpPath); err != nil {
 		return "", fmt.Errorf("failed to decompress backup: %w", err)
 	}
 
