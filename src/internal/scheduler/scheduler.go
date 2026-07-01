@@ -84,7 +84,14 @@ func (s *Scheduler) runBackup() {
 	startTime := time.Now()
 	logrus.Info("Starting scheduled backup")
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+	// アップロードタイムアウトにpg_dump/圧縮ぶんの余裕を加算
+	uploadTimeout := s.config.UploadTimeout
+	if uploadTimeout <= 0 {
+		uploadTimeout = 60
+	}
+	timeout := time.Duration(uploadTimeout)*time.Minute + 30*time.Minute
+
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
 	result, err := s.backupService.CreateBackup(ctx)
