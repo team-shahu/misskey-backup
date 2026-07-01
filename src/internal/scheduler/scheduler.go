@@ -84,7 +84,7 @@ func (s *Scheduler) runBackup() {
 	startTime := time.Now()
 	logrus.Info("Starting scheduled backup")
 
-	// アップロードタイムアウトにpg_dump/圧縮ぶんの余裕を加算
+	// アップロードタイムアウトにダンプ/圧縮ぶんの余裕を加算(有効ターゲット逐次実行を包含)
 	uploadTimeout := s.config.UploadTimeout
 	if uploadTimeout <= 0 {
 		uploadTimeout = 60
@@ -94,24 +94,32 @@ func (s *Scheduler) runBackup() {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	result, err := s.backupService.CreateBackup(ctx)
+	results, err := s.backupService.CreateBackup(ctx)
 	if err != nil {
+		// 事前処理エラー(全体中断)
 		duration := time.Since(startTime)
 		logrus.Errorf("Backup failed: %v", err)
 
-		// 失敗通知
-		if notifyErr := s.notificationService.NotifyBackupFailure(ctx, err, duration); notifyErr != nil {
+		if notifyErr := s.notificationService.NotifyBackupFailure(ctx, "バックアップ", err, duration); notifyErr != nil {
 			logrus.Errorf("Failed to send failure notification: %v", notifyErr)
 		}
 		return
 	}
 
-	// 成功通知
-	if notifyErr := s.notificationService.NotifyBackupSuccess(ctx, result); notifyErr != nil {
-		logrus.Errorf("Failed to send success notification: %v", notifyErr)
+	// ターゲットごとに個別通知
+	for _, result := range results {
+		if result.Success {
+			if notifyErr := s.notificationService.NotifyBackupSuccess(ctx, result); notifyErr != nil {
+				logrus.Errorf("Failed to send success notification: %v", notifyErr)
+			}
+		} else {
+			if notifyErr := s.notificationService.NotifyBackupFailure(ctx, result.Target, result.Error, result.Duration); notifyErr != nil {
+				logrus.Errorf("Failed to send failure notification: %v", notifyErr)
+			}
+		}
 	}
 
-	logrus.Infof("Scheduled backup completed successfully in %v", result.Duration)
+	logrus.Infof("Scheduled backup finished in %v", time.Since(startTime))
 }
 
 func (s *Scheduler) shouldRunInitialBackup() bool {

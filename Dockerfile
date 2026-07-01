@@ -23,7 +23,8 @@ RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o misskey-backup .
 # pg18クライアント同梱の公式イメージを使いedgeリポジトリ依存を排除
 FROM postgres:18-alpine
 
-RUN apk add --no-cache ca-certificates tzdata zstd curl
+# redisパッケージでredis-cli/redis-check-rdbを同梱
+RUN apk add --no-cache ca-certificates tzdata zstd curl redis
 
 # 非rootユーザーを作成
 RUN addgroup -g 1001 -S appgroup && \
