@@ -12,6 +12,7 @@ import (
 
 	"misskey-backup/internal/backup"
 	"misskey-backup/internal/config"
+	"misskey-backup/internal/health"
 	"misskey-backup/internal/notification"
 	"misskey-backup/internal/scheduler"
 
@@ -79,6 +80,10 @@ func main() {
 		return
 	}
 
+	// ヘルスチェックサーバー起動
+	healthServer := health.NewServer(":8080")
+	healthServer.Start()
+
 	// スケジューラー初期化
 	scheduler := scheduler.NewScheduler(backupService, notificationService, cfg)
 
@@ -116,6 +121,10 @@ func main() {
 
 	if err := scheduler.Stop(shutdownCtx); err != nil {
 		log.Printf("Error during shutdown: %v", err)
+	}
+
+	if err := healthServer.Stop(shutdownCtx); err != nil {
+		logrus.Errorf("Error stopping health server: %v", err)
 	}
 
 	logrus.Info("Service stopped")
