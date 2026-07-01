@@ -134,6 +134,13 @@ func (s *Service) CreateBackup(ctx context.Context) (*BackupResult, error) {
 		return result, result.Error
 	}
 
+	// ダンプ健全性検証
+	if err := s.verifyDump(ctx, backupFilePath); err != nil {
+		result.Success = false
+		result.Error = fmt.Errorf("failed to verify backup: %w", err)
+		return result, result.Error
+	}
+
 	// ファイルの圧縮
 	if err := s.compressFile(ctx, backupFilePath, compressedFilePath); err != nil {
 		result.Success = false
@@ -218,6 +225,16 @@ func (s *Service) createPostgresBackup(ctx context.Context, filePath string) err
 	cmd.Stderr = os.Stderr
 
 	logrus.Infof("Creating PostgreSQL backup: %s", filePath)
+	return cmd.Run()
+}
+
+// verifyDump pg_restore --listでTOCを読みダンプ健全性を検証
+func (s *Service) verifyDump(ctx context.Context, filePath string) error {
+	cmd := exec.CommandContext(ctx, "pg_restore", "--list", filePath)
+	cmd.Stdout = io.Discard
+	cmd.Stderr = os.Stderr
+
+	logrus.Infof("Verifying backup dump: %s", filePath)
 	return cmd.Run()
 }
 
