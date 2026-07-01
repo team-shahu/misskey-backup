@@ -10,6 +10,8 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
+	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -224,21 +226,43 @@ func (s *Service) compressFile(ctx context.Context, inputPath, outputPath string
 }
 
 func (s *Service) cleanupOldBackups(ctx context.Context) error {
-	// 古いバックアップファイルの削除
-	cutoffDate := time.Now().AddDate(0, 0, -s.config.BackupRetention)
+	// 保持世代数が未設定なら誤削除防止のためスキップ
+	keep := s.config.BackupGenerations
+	if keep <= 0 {
+		logrus.Warnf("BackupGenerations=%d, skip cleanup", keep)
+		return nil
+	}
+
+	// バックアップ命名規則に一致するファイルのみ対象
+	nameRe := regexp.MustCompile(fmt.Sprintf(
+		`^%s_\d{4}-\d{2}-\d{2}_\d{2}-\d{2}\.dump\.zst(\.enc)?$`,
+		regexp.QuoteMeta(s.config.PostgresDB)))
 
 	files, err := s.storage.List(ctx, "")
 	if err != nil {
 		return fmt.Errorf("failed to list files: %w", err)
 	}
 
+	var backups []storage.FileInfo
 	for _, file := range files {
-		if file.ModTime.Before(cutoffDate) {
-			if err := s.storage.Delete(ctx, file.Name); err != nil {
-				logrus.Warnf("Failed to delete old backup %s: %v", file.Name, err)
-			} else {
-				logrus.Infof("Deleted old backup: %s", file.Name)
-			}
+		if nameRe.MatchString(file.Name) {
+			backups = append(backups, file)
+		}
+	}
+
+	// 新しい順に並べ、直近keep件を超えた古い世代を削除
+	sort.Slice(backups, func(i, j int) bool {
+		return backups[i].ModTime.After(backups[j].ModTime)
+	})
+	if len(backups) <= keep {
+		return nil
+	}
+
+	for _, file := range backups[keep:] {
+		if err := s.storage.Delete(ctx, file.Name); err != nil {
+			logrus.Warnf("Failed to delete old backup %s: %v", file.Name, err)
+		} else {
+			logrus.Infof("Deleted old backup: %s", file.Name)
 		}
 	}
 

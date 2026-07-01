@@ -16,10 +16,10 @@ type Config struct {
 	PostgresDB       string
 
 	// バックアップ設定
-	BackupDir        string
-	BackupRetention  int
-	CompressionLevel int
-	EncryptionKey    string
+	BackupDir         string
+	BackupGenerations int
+	CompressionLevel  int
+	EncryptionKey     string
 
 	// Cloudflare R2設定
 	R2Endpoint        string
@@ -65,7 +65,7 @@ func Load() (*Config, error) {
 		PostgresPassword:  getEnv("POSTGRES_PASSWORD", ""),
 		PostgresDB:        getEnv("POSTGRES_DB", "misskey"),
 		BackupDir:         getEnv("BACKUP_DIR", "/app/backups"),
-		BackupRetention:   getEnvAsInt("BACKUP_RETENTION", 30),
+		BackupGenerations: getEnvAsInt("BACKUP_GENERATIONS", 30),
 		CompressionLevel:  getEnvAsInt("COMPRESSION_LEVEL", 3),
 		EncryptionKey:     getEnv("BACKUP_ENCRYPTION_KEY", ""),
 		R2Endpoint:        getEnv("BACKUP_ENDPOINT", ""),

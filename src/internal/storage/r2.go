@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	"path"
+	"strings"
 	"sync"
 	"time"
 
@@ -459,38 +460,46 @@ func (r *R2Storage) Delete(ctx context.Context, remotePath string) error {
 func (r *R2Storage) List(ctx context.Context, prefix string) ([]FileInfo, error) {
 	fullPrefix := path.Join(r.prefix, prefix)
 
-	var result *s3.ListObjectsV2Output
-	err := r.retryWithBackoff(ctx, func() error {
-		var err error
-		result, err = r.client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
-			Bucket: aws.String(r.bucketName),
-			Prefix: aws.String(fullPrefix),
-		})
-		return err
-	}, "list objects from R2")
-
-	if err != nil {
-		return nil, fmt.Errorf("failed to list objects after retries: %w", err)
-	}
-
 	var files []FileInfo
-	for _, obj := range result.Contents {
-		// プレフィックスを除去してファイル名を取得
-		fileName := *obj.Key
-		if r.prefix != "" {
-			fileName = fileName[len(r.prefix)+1:] // +1 for the slash
+	var token *string
+	for {
+		var result *s3.ListObjectsV2Output
+		err := r.retryWithBackoff(ctx, func() error {
+			var err error
+			result, err = r.client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
+				Bucket:            aws.String(r.bucketName),
+				Prefix:            aws.String(fullPrefix),
+				ContinuationToken: token,
+			})
+			return err
+		}, "list objects from R2")
+		if err != nil {
+			return nil, fmt.Errorf("failed to list objects after retries: %w", err)
 		}
 
-		var size int64
-		if obj.Size != nil {
-			size = *obj.Size
+		for _, obj := range result.Contents {
+			// プレフィックスを除去してファイル名を取得
+			fileName := *obj.Key
+			if r.prefix != "" && strings.HasPrefix(fileName, r.prefix+"/") {
+				fileName = fileName[len(r.prefix)+1:]
+			}
+
+			var size int64
+			if obj.Size != nil {
+				size = *obj.Size
+			}
+
+			files = append(files, FileInfo{
+				Name:    fileName,
+				Size:    size,
+				ModTime: *obj.LastModified,
+			})
 		}
 
-		files = append(files, FileInfo{
-			Name:    fileName,
-			Size:    size,
-			ModTime: *obj.LastModified,
-		})
+		if result.IsTruncated == nil || !*result.IsTruncated {
+			break
+		}
+		token = result.NextContinuationToken
 	}
 
 	return files, nil
