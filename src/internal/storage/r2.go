@@ -345,25 +345,26 @@ func (r *R2Storage) uploadMultipart(ctx context.Context, localPath, fullRemotePa
 			}
 			defer file.Close()
 
-			// ファイルの位置を設定
-			_, err = file.Seek(start, 0)
-			if err != nil {
-				errors <- fmt.Errorf("failed to seek file for part %d: %w", partNum, err)
-				return
-			}
-
-			// パートをアップロード
 			partNumberInt32 := int32(partNum)
 			partSizeInt64 := partSize
 
-			uploadPartResp, err := r.client.UploadPart(uploadCtx, &s3.UploadPartInput{
-				Bucket:        aws.String(r.bucketName),
-				Key:           aws.String(fullRemotePath),
-				PartNumber:    &partNumberInt32,
-				UploadId:      uploadID,
-				Body:          io.LimitReader(file, partSize),
-				ContentLength: &partSizeInt64,
-			})
+			// パート単位でリトライ、再試行時は先頭へシーク
+			var uploadPartResp *s3.UploadPartOutput
+			err = r.retryWithBackoff(uploadCtx, func() error {
+				if _, serr := file.Seek(start, 0); serr != nil {
+					return fmt.Errorf("failed to seek: %w", serr)
+				}
+				var perr error
+				uploadPartResp, perr = r.client.UploadPart(uploadCtx, &s3.UploadPartInput{
+					Bucket:        aws.String(r.bucketName),
+					Key:           aws.String(fullRemotePath),
+					PartNumber:    &partNumberInt32,
+					UploadId:      uploadID,
+					Body:          io.LimitReader(file, partSize),
+					ContentLength: &partSizeInt64,
+				})
+				return perr
+			}, fmt.Sprintf("upload part %d/%d", partNum, numParts))
 			if err != nil {
 				errors <- fmt.Errorf("failed to upload part %d: %w", partNum, err)
 				return
@@ -385,12 +386,14 @@ func (r *R2Storage) uploadMultipart(ctx context.Context, localPath, fullRemotePa
 
 	// エラーチェック
 	for err := range errors {
-		// マルチパートアップロードを中止
-		r.client.AbortMultipartUpload(uploadCtx, &s3.AbortMultipartUploadInput{
+		// uploadCtxが失効していても中止できるよう独立コンテキストで実行
+		abortCtx, abortCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		r.client.AbortMultipartUpload(abortCtx, &s3.AbortMultipartUploadInput{
 			Bucket:   aws.String(r.bucketName),
 			Key:      aws.String(fullRemotePath),
 			UploadId: uploadID,
 		})
+		abortCancel()
 		return "", fmt.Errorf("multipart upload failed: %w", err)
 	}
 
