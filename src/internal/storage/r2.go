@@ -37,6 +37,9 @@ type R2Storage struct {
 // 大容量ファイル用デフォルトアップロードタイムアウト、rcloneに合わせ60分
 const defaultUploadTimeout = 60 * time.Minute
 
+// 署名付きURLの有効期限
+const presignExpiry = 7 * 24 * time.Hour
+
 // isRetryableError HTTPステータス・APIコード・ネットワークタイムアウトでリトライ可否を判定
 func isRetryableError(err error) bool {
 	if err == nil {
@@ -248,9 +251,7 @@ func (r *R2Storage) uploadSimple(ctx context.Context, localPath, fullRemotePath 
 
 	logrus.Infof("Uploaded %s to R2: %s", localPath, fullRemotePath)
 
-	// ダウンロードURLを生成
-	downloadURL := fmt.Sprintf("%s/%s/%s", r.config.R2Endpoint, r.bucketName, fullRemotePath)
-	return downloadURL, nil
+	return r.presignGetURL(ctx, fullRemotePath)
 }
 
 // uploadMultipart handles multipart upload for large files
@@ -392,9 +393,7 @@ func (r *R2Storage) uploadMultipart(ctx context.Context, localPath, fullRemotePa
 
 	logrus.Infof("Completed multipart upload for file: %s", localPath)
 
-	// ダウンロードURLを生成
-	downloadURL := fmt.Sprintf("%s/%s/%s", r.config.R2Endpoint, r.bucketName, fullRemotePath)
-	return downloadURL, nil
+	return r.presignGetURL(ctx, fullRemotePath)
 }
 
 func (r *R2Storage) Download(ctx context.Context, remotePath, localPath string) error {
@@ -499,6 +498,18 @@ func (r *R2Storage) List(ctx context.Context, prefix string) ([]FileInfo, error)
 
 func (r *R2Storage) GetDownloadURL(ctx context.Context, remotePath string) (string, error) {
 	fullRemotePath := path.Join(r.prefix, remotePath)
-	downloadURL := fmt.Sprintf("%s/%s/%s", r.config.R2Endpoint, r.bucketName, fullRemotePath)
-	return downloadURL, nil
+	return r.presignGetURL(ctx, fullRemotePath)
+}
+
+// presignGetURL GET用の署名付きURLを生成
+func (r *R2Storage) presignGetURL(ctx context.Context, key string) (string, error) {
+	presign := s3.NewPresignClient(r.client)
+	req, err := presign.PresignGetObject(ctx, &s3.GetObjectInput{
+		Bucket: aws.String(r.bucketName),
+		Key:    aws.String(key),
+	}, s3.WithPresignExpires(presignExpiry))
+	if err != nil {
+		return "", fmt.Errorf("failed to presign download URL: %w", err)
+	}
+	return req.URL, nil
 }
