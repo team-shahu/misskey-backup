@@ -132,7 +132,7 @@ func (s *Service) CreateBackup(ctx context.Context) (*BackupResult, error) {
 	}
 
 	// ファイルの圧縮
-	if err := s.compressFile(backupFilePath, compressedFilePath); err != nil {
+	if err := s.compressFile(ctx, backupFilePath, compressedFilePath); err != nil {
 		result.Success = false
 		result.Error = fmt.Errorf("failed to compress backup file: %w", err)
 		return result, result.Error
@@ -214,8 +214,8 @@ func (s *Service) createPostgresBackup(filePath string) error {
 	return cmd.Run()
 }
 
-func (s *Service) compressFile(inputPath, outputPath string) error {
-	cmd := exec.Command("zstd", "-f", "-"+fmt.Sprintf("%d", s.config.CompressionLevel), inputPath, "-o", outputPath)
+func (s *Service) compressFile(ctx context.Context, inputPath, outputPath string) error {
+	cmd := exec.CommandContext(ctx, "zstd", "-f", "-"+fmt.Sprintf("%d", s.config.CompressionLevel), inputPath, "-o", outputPath)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 
@@ -246,8 +246,8 @@ func (s *Service) cleanupOldBackups(ctx context.Context) error {
 }
 
 // decompressFile zstdで解凍
-func (s *Service) decompressFile(inputPath, outputPath string) error {
-	cmd := exec.Command("zstd", "-d", "-f", inputPath, "-o", outputPath)
+func (s *Service) decompressFile(ctx context.Context, inputPath, outputPath string) error {
+	cmd := exec.CommandContext(ctx, "zstd", "-d", "-f", inputPath, "-o", outputPath)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 
@@ -321,11 +321,11 @@ func (s *Service) RetrieveBackupFromURL(ctx context.Context, downloadURL string)
 
 	logrus.Infof("Download completed: %s (%.2f MB)", encryptedPath, float64(progress.downloaded)/1024/1024)
 
-	return s.processEncryptedBackup(encryptedPath)
+	return s.processEncryptedBackup(ctx, encryptedPath)
 }
 
 // processEncryptedBackup 暗号化済みファイルを復号→解凍してダンプを返す
-func (s *Service) processEncryptedBackup(encryptedPath string) (string, error) {
+func (s *Service) processEncryptedBackup(ctx context.Context, encryptedPath string) (string, error) {
 	decryptedZstPath := strings.TrimSuffix(encryptedPath, ".enc")
 	restoreDumpPath := strings.TrimSuffix(decryptedZstPath, ".zst")
 
@@ -336,7 +336,7 @@ func (s *Service) processEncryptedBackup(encryptedPath string) (string, error) {
 	}
 	defer os.Remove(decryptedZstPath)
 
-	if err := s.decompressFile(decryptedZstPath, restoreDumpPath); err != nil {
+	if err := s.decompressFile(ctx, decryptedZstPath, restoreDumpPath); err != nil {
 		return "", fmt.Errorf("failed to decompress backup: %w", err)
 	}
 
