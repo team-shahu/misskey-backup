@@ -2,10 +2,12 @@ package storage
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"math"
 	mathrand "math/rand"
+	"net"
 	"os"
 	"path"
 	"sync"
@@ -18,6 +20,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
+	"github.com/aws/smithy-go"
+	smithyhttp "github.com/aws/smithy-go/transport/http"
 	"github.com/sirupsen/logrus"
 )
 
@@ -31,41 +35,34 @@ type R2Storage struct {
 // 大容量ファイル用デフォルトアップロードタイムアウト、rcloneに合わせ60分
 const defaultUploadTimeout = 60 * time.Minute
 
-// isRetryableError checks if the error is retryable
+// isRetryableError HTTPステータス・APIコード・ネットワークタイムアウトでリトライ可否を判定
 func isRetryableError(err error) bool {
 	if err == nil {
 		return false
 	}
 
-	// Check for specific error patterns that are retryable
-	errStr := err.Error()
-
-	// 500 Internal Server Error
-	if errStr == "operation error S3: PutObject, exceeded maximum number of attempts, 3, https response error StatusCode: 500" {
-		return true
+	// HTTPステータスコード
+	var respErr *smithyhttp.ResponseError
+	if errors.As(err, &respErr) {
+		switch respErr.HTTPStatusCode() {
+		case 408, 429, 500, 502, 503, 504:
+			return true
+		}
 	}
 
-	// Generic 500 errors from Cloudflare R2
-	if errStr == "operation error S3: PutObject, exceeded maximum number of attempts, 3, https response error StatusCode: 500, RequestID: , HostID: , api error InternalError: We encountered an internal error. Please try again." {
-		return true
+	// リトライ可能なAPIエラーコード
+	var apiErr smithy.APIError
+	if errors.As(err, &apiErr) {
+		switch apiErr.ErrorCode() {
+		case "InternalError", "SlowDown", "RequestTimeout", "RequestTimeoutException",
+			"ThrottlingException", "RequestThrottled", "ServiceUnavailable":
+			return true
+		}
 	}
 
-	// Check for other common retryable patterns
-	if errStr == "operation error S3: PutObject, exceeded maximum number of attempts, 3, https response error StatusCode: 503" {
-		return true
-	}
-
-	if errStr == "operation error S3: PutObject, exceeded maximum number of attempts, 3, https response error StatusCode: 429" {
-		return true
-	}
-
-	// タイムアウトエラー
-	if errStr == "operation error S3: PutObject, exceeded maximum number of attempts, 3, context deadline exceeded" {
-		return true
-	}
-
-	// ネットワークエラー
-	if errStr == "operation error S3: PutObject, exceeded maximum number of attempts, 3, net/http: TLS handshake timeout" {
+	// ネットワークタイムアウト
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
 		return true
 	}
 
