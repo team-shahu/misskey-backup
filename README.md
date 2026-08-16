@@ -115,6 +115,7 @@ PostgreSQLもRedisもデフォルトで有効。片方だけ運用したい場�
 | `NOTIFICATION` | Discord通知の有効化 | `false` |
 | `DISCORD_WEBHOOK_URL` | Discord Webhook URL | - |
 | `NOTIFY_INCLUDE_URL` | 通知にダウンロードURLを含める | `true` |
+| `NOTIFY_ON_FAILURE_ONLY` | 失敗時のみ通知する | `false` |
 
 ### スケジューラー設定
 

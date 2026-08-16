@@ -62,7 +62,7 @@ func formatDuration(d time.Duration) string {
 }
 
 func (s *Service) NotifyBackupSuccess(ctx context.Context, result *backup.BackupResult) error {
-	if !s.config.Notification || s.config.DiscordWebhookURL == "" {
+	if !s.config.Notification || s.config.DiscordWebhookURL == "" || s.config.NotifyOnFailureOnly {
 		return nil
 	}
 
