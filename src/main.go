@@ -80,6 +80,13 @@ func main() {
 		return
 	}
 
+	// 起動通知でWebhookの疎通と投稿先を確認
+	startupCtx, startupCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	if err := notificationService.NotifyStartup(startupCtx); err != nil {
+		logrus.Warnf("Failed to send startup notification: %v", err)
+	}
+	startupCancel()
+
 	// ヘルスチェックサーバー起動
 	healthServer := health.NewServer(":8080")
 	healthServer.Start()

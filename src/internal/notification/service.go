@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"misskey-backup/internal/backup"
@@ -61,8 +62,47 @@ func formatDuration(d time.Duration) string {
 	}
 }
 
+// NotifyStartup 起動時通知
+func (s *Service) NotifyStartup(ctx context.Context) error {
+	if !s.config.Notification || s.config.DiscordWebhookURL == "" || !s.config.NotifyStartupCheck {
+		return nil
+	}
+
+	targets := []string{}
+	if s.config.PostgresEnabled {
+		targets = append(targets, "PostgreSQL")
+	}
+	if s.config.RedisEnabled {
+		targets = append(targets, "Redis")
+	}
+	if len(targets) == 0 {
+		targets = append(targets, "None")
+	}
+
+	embed := DiscordEmbed{
+		Title:       "🔔 Backup service started",
+		Description: "Notifications will be delivered to this channel",
+		Color:       3447003,
+		Timestamp:   time.Now().Format(time.RFC3339),
+		Fields: []DiscordEmbedField{
+			{
+				Name:   ":package: Targets",
+				Value:  strings.Join(targets, " / "),
+				Inline: true,
+			},
+			{
+				Name:   ":calendar: Schedule",
+				Value:  fmt.Sprintf("%s (%s)", s.config.CronSchedule, s.config.Timezone),
+				Inline: true,
+			},
+		},
+	}
+
+	return s.sendDiscordWebhook(ctx, embed)
+}
+
 func (s *Service) NotifyBackupSuccess(ctx context.Context, result *backup.BackupResult) error {
-	if !s.config.Notification || s.config.DiscordWebhookURL == "" {
+	if !s.config.Notification || s.config.DiscordWebhookURL == "" || s.config.NotifyOnFailureOnly {
 		return nil
 	}
 

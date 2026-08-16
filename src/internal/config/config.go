@@ -53,9 +53,11 @@ type Config struct {
 	Debug bool
 
 	// 通知設定
-	Notification      bool
-	DiscordWebhookURL string
-	NotifyIncludeURL  bool
+	Notification        bool
+	DiscordWebhookURL   string
+	NotifyIncludeURL    bool
+	NotifyOnFailureOnly bool
+	NotifyStartupCheck  bool
 
 	// スケジューラー設定
 	CronSchedule string
@@ -69,39 +71,41 @@ func Load() (*Config, error) {
 	}
 
 	cfg := &Config{
-		PostgresEnabled:   getEnvAsBool("POSTGRES_BACKUP_ENABLED", true),
-		RedisEnabled:      getEnvAsBool("REDIS_BACKUP_ENABLED", true),
-		PostgresHost:      getEnv("POSTGRES_HOST", "localhost"),
-		PostgresPort:      getEnvAsInt("POSTGRES_PORT", 5432),
-		PostgresUser:      getEnv("POSTGRES_USER", "postgres"),
-		PostgresPassword:  getEnv("POSTGRES_PASSWORD", ""),
-		PostgresDB:        getEnv("POSTGRES_DB", "misskey"),
-		RedisHost:         getEnv("REDIS_HOST", "redis"),
-		RedisPort:         getEnvAsInt("REDIS_PORT", 6379),
-		RedisPassword:     getEnv("REDIS_PASSWORD", ""),
-		RedisTLS:          getEnvAsBool("REDIS_TLS", false),
-		BackupDir:         getEnv("BACKUP_DIR", "/app/backups"),
-		BackupGenerations: getEnvAsInt("BACKUP_GENERATIONS", 30),
-		CompressionLevel:  getEnvAsInt("COMPRESSION_LEVEL", 3),
-		EncryptionKey:     getEnv("BACKUP_ENCRYPTION_KEY", ""),
-		R2Endpoint:        getEnv("BACKUP_ENDPOINT", ""),
-		R2AccessKeyID:     getEnv("BACKUP_ACCESS_KEY_ID", ""),
-		R2SecretAccessKey: getEnv("BACKUP_SECRET_ACCESS_KEY", ""),
-		R2BucketName:      getEnv("R2_BUCKET_NAME", ""),
-		R2Prefix:          getEnv("R2_PREFIX", ""),
-		R2BucketACL:       getEnv("BACKUP_BUCKET_ACL", ""),
-		MaxRetries:        getEnvAsInt("MAX_RETRIES", 5),
-		RetryBaseDelay:    getEnvAsInt("RETRY_BASE_DELAY", 1),
-		RetryMaxDelay:     getEnvAsInt("RETRY_MAX_DELAY", 30),
-		UploadTimeout:     getEnvAsInt("UPLOAD_TIMEOUT", 60),
-		ChunkSize:         getEnvAsInt("CHUNK_SIZE", 10),
-		MaxConcurrency:    getEnvAsInt("MAX_CONCURRENCY", 5),
-		Debug:             getEnvAsBool("DEBUG", false),
-		Notification:      getEnvAsBool("NOTIFICATION", false),
-		DiscordWebhookURL: getEnv("DISCORD_WEBHOOK_URL", ""),
-		NotifyIncludeURL:  getEnvAsBool("NOTIFY_INCLUDE_URL", true),
-		CronSchedule:      getEnv("CRON_SCHEDULE", "0 5,17 * * *"),
-		Timezone:          getEnv("TZ", "Asia/Tokyo"),
+		PostgresEnabled:     getEnvAsBool("POSTGRES_BACKUP_ENABLED", true),
+		RedisEnabled:        getEnvAsBool("REDIS_BACKUP_ENABLED", true),
+		PostgresHost:        getEnv("POSTGRES_HOST", "localhost"),
+		PostgresPort:        getEnvAsInt("POSTGRES_PORT", 5432),
+		PostgresUser:        getEnv("POSTGRES_USER", "postgres"),
+		PostgresPassword:    getEnv("POSTGRES_PASSWORD", ""),
+		PostgresDB:          getEnv("POSTGRES_DB", "misskey"),
+		RedisHost:           getEnv("REDIS_HOST", "redis"),
+		RedisPort:           getEnvAsInt("REDIS_PORT", 6379),
+		RedisPassword:       getEnv("REDIS_PASSWORD", ""),
+		RedisTLS:            getEnvAsBool("REDIS_TLS", false),
+		BackupDir:           getEnv("BACKUP_DIR", "/app/backups"),
+		BackupGenerations:   getEnvAsInt("BACKUP_GENERATIONS", 30),
+		CompressionLevel:    getEnvAsInt("COMPRESSION_LEVEL", 3),
+		EncryptionKey:       getEnv("BACKUP_ENCRYPTION_KEY", ""),
+		R2Endpoint:          getEnv("BACKUP_ENDPOINT", ""),
+		R2AccessKeyID:       getEnv("BACKUP_ACCESS_KEY_ID", ""),
+		R2SecretAccessKey:   getEnv("BACKUP_SECRET_ACCESS_KEY", ""),
+		R2BucketName:        getEnv("R2_BUCKET_NAME", ""),
+		R2Prefix:            getEnv("R2_PREFIX", ""),
+		R2BucketACL:         getEnv("BACKUP_BUCKET_ACL", ""),
+		MaxRetries:          getEnvAsInt("MAX_RETRIES", 5),
+		RetryBaseDelay:      getEnvAsInt("RETRY_BASE_DELAY", 1),
+		RetryMaxDelay:       getEnvAsInt("RETRY_MAX_DELAY", 30),
+		UploadTimeout:       getEnvAsInt("UPLOAD_TIMEOUT", 60),
+		ChunkSize:           getEnvAsInt("CHUNK_SIZE", 10),
+		MaxConcurrency:      getEnvAsInt("MAX_CONCURRENCY", 5),
+		Debug:               getEnvAsBool("DEBUG", false),
+		Notification:        getEnvAsBool("NOTIFICATION", false),
+		DiscordWebhookURL:   getEnv("DISCORD_WEBHOOK_URL", ""),
+		NotifyIncludeURL:    getEnvAsBool("NOTIFY_INCLUDE_URL", true),
+		NotifyOnFailureOnly: getEnvAsBool("NOTIFY_ON_FAILURE_ONLY", false),
+		NotifyStartupCheck:  getEnvAsBool("NOTIFY_STARTUP_CHECK", true),
+		CronSchedule:        getEnv("CRON_SCHEDULE", "0 5,17 * * *"),
+		Timezone:            getEnv("TZ", "Asia/Tokyo"),
 	}
 
 	return cfg, nil
