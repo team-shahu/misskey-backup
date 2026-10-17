@@ -1,0 +1,39 @@
+name: E2E
+
+on:
+  pull_request:
+    paths:
+      - 'src/**'
+      - 'e2e/**'
+      - 'Dockerfile'
+      - 'test-data.sql'
+      - '.github/workflows/e2e.yaml'
+  push:
+    branches: [dev]
+    paths:
+      - 'src/**'
+      - 'e2e/**'
+      - 'Dockerfile'
+      - 'test-data.sql'
+      - '.github/workflows/e2e.yaml'
+
+permissions:
+  contents: read
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: e2e/go.mod
+          cache-dependency-path: e2e/go.sum
+
+      - name: Run E2E
+        working-directory: e2e
+        run: go test -tags e2e -v -count=1 -timeout 15m ./...
