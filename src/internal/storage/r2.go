@@ -143,31 +143,38 @@ func (r *R2Storage) retryWithBackoff(ctx context.Context, operation func() error
 	return lastErr
 }
 
+// エンドポイントURLをscheme://hostへ正規化
+func normalizeEndpoint(endpoint string) (string, error) {
+	parsed, err := url.Parse(endpoint)
+	if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+		return "", fmt.Errorf("invalid storage endpoint format: %s", endpoint)
+	}
+	return parsed.Scheme + "://" + parsed.Host, nil
+}
+
 func NewR2Storage(cfg *config.Config) (*R2Storage, error) {
-	// R2設定の検証
+	// ストレージ設定の検証
 	if cfg.R2Endpoint == "" || cfg.R2AccessKeyID == "" || cfg.R2SecretAccessKey == "" {
-		return nil, fmt.Errorf("R2 configuration is incomplete")
+		return nil, fmt.Errorf("storage configuration is incomplete")
 	}
 
-	// エンドポイントURLのホスト名からアカウントIDを抽出
-	// 例: https://<accountID>.r2.cloudflarestorage.com
-	parsed, err := url.Parse(cfg.R2Endpoint)
-	if err != nil || parsed.Host == "" {
-		return nil, fmt.Errorf("invalid R2 endpoint format: %s", cfg.R2Endpoint)
-	}
-	accountID := strings.TrimSuffix(parsed.Host, ".r2.cloudflarestorage.com")
-	if accountID == "" || accountID == parsed.Host {
-		return nil, fmt.Errorf("invalid R2 endpoint format: %s", cfg.R2Endpoint)
+	endpoint, err := normalizeEndpoint(cfg.R2Endpoint)
+	if err != nil {
+		return nil, err
 	}
 
-	// Cloudflare R2公式ドキュメントに基づく設定
+	region := cfg.R2Region
+	if region == "" {
+		region = "auto"
+	}
+
 	awsCfg, err := awsconfig.LoadDefaultConfig(context.Background(),
 		awsconfig.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(
 			cfg.R2AccessKeyID,
 			cfg.R2SecretAccessKey,
 			"",
 		)),
-		awsconfig.WithRegion("auto"),
+		awsconfig.WithRegion(region),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load AWS config: %w", err)
@@ -175,7 +182,8 @@ func NewR2Storage(cfg *config.Config) (*R2Storage, error) {
 
 	// クライアント作成
 	client := s3.NewFromConfig(awsCfg, func(o *s3.Options) {
-		o.BaseEndpoint = aws.String(fmt.Sprintf("https://%s.r2.cloudflarestorage.com", accountID))
+		o.BaseEndpoint = aws.String(endpoint)
+		o.UsePathStyle = cfg.R2ForcePathStyle
 	})
 
 	return &R2Storage{
