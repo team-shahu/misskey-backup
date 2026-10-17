@@ -31,13 +31,15 @@ type Config struct {
 	CompressionLevel  int
 	EncryptionKey     string
 
-	// Cloudflare R2設定
+	// S3互換ストレージ設定(既定R2)
 	R2Endpoint        string
 	R2AccessKeyID     string
 	R2SecretAccessKey string
 	R2BucketName      string
 	R2Prefix          string
 	R2BucketACL       string
+	R2Region          string
+	R2ForcePathStyle  bool
 
 	// リトライ設定
 	MaxRetries     int
@@ -92,6 +94,8 @@ func Load() (*Config, error) {
 		R2BucketName:        getEnv("R2_BUCKET_NAME", ""),
 		R2Prefix:            getEnv("R2_PREFIX", ""),
 		R2BucketACL:         getEnv("BACKUP_BUCKET_ACL", ""),
+		R2Region:            getEnv("BACKUP_REGION", "auto"),
+		R2ForcePathStyle:    getEnvAsBool("BACKUP_FORCE_PATH_STYLE", false),
 		MaxRetries:          getEnvAsInt("MAX_RETRIES", 5),
 		RetryBaseDelay:      getEnvAsInt("RETRY_BASE_DELAY", 1),
 		RetryMaxDelay:       getEnvAsInt("RETRY_MAX_DELAY", 30),

@@ -14,7 +14,7 @@ Misskeyで利用するPostgreSQLとRedisを自動でバックアップ・管理�
 ## Prerequisites
 
 - Docker & Docker Compose
-- Cloudflare R2アカウントとバケット
+- Cloudflare R2(またはS3互換ストレージ)のバケット
 - PostgreSQLデータベースへのアクセス権限
 
 ## Quick Start
@@ -81,14 +81,18 @@ PostgreSQLもRedisもデフォルトで有効。片方だけ運用したい場�
 | `COMPRESSION_LEVEL` | zstd圧縮レベル (1-19) | `3` |
 | `BACKUP_ENCRYPTION_KEY` | バックアップ暗号化キー、32バイト以上 (必須) | - |
 
-### Cloudflare R2設定
+### ストレージ設定
+
+Cloudflare R2を既定とし、S3互換ストレージ(AWS S3, RustFS, SeaweedFS等)をサポートしています。
 
 | 項目 | 説明 |
 |------|------|
-| `BACKUP_ENDPOINT` | R2エンドポイントURL |
-| `BACKUP_ACCESS_KEY_ID` | R2アクセスキーID |
-| `BACKUP_SECRET_ACCESS_KEY` | R2シークレットアクセスキー |
-| `R2_BUCKET_NAME` | R2バケット名 |
+| `BACKUP_ENDPOINT` | エンドポイントURL (例: `https://<accountID>.r2.cloudflarestorage.com`, `http://rustfs:9000`) |
+| `BACKUP_REGION` | リージョン (既定: `auto`、R2以外を利用する場合には対象ストレージのリージョンを指定) |
+| `BACKUP_FORCE_PATH_STYLE` | パススタイルでアクセスする (既定: `false`) |
+| `BACKUP_ACCESS_KEY_ID` | アクセスキーID |
+| `BACKUP_SECRET_ACCESS_KEY` | シークレットアクセスキー |
+| `R2_BUCKET_NAME` | バケット名 |
 | `R2_PREFIX` | バックアップファイルのプレフィックス |
 | `BACKUP_BUCKET_ACL` | バケットのACL設定 |
 
