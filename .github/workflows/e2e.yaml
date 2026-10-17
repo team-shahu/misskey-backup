@@ -23,7 +23,7 @@ permissions:
 jobs:
   e2e:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 40
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -36,4 +36,4 @@ jobs:
 
       - name: Run E2E
         working-directory: e2e
-        run: go test -tags e2e -v -count=1 -timeout 15m ./...
+        run: go test -tags e2e -v -count=1 -timeout 30m ./...

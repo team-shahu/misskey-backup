@@ -3,8 +3,12 @@
 package e2e
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"fmt"
 	"io"
+	"net/http"
 	"regexp"
 	"strings"
 	"testing"
@@ -25,46 +29,40 @@ const (
 	region    = "us-east-1"
 	bucket    = "e2e"
 	prefix    = "backups"
+
+	misskeyImage  = "misskey/misskey:2026.10.0"
+	postgresImage = "postgres:18-alpine"
+	redisImage    = "redis:7-alpine"
+
+	dbName     = "misskey"
+	dbUser     = "misskey"
+	dbPassword = "misskey"
 )
+
+const misskeyConfig = `url: http://misskey:3000/
+port: 3000
+db:
+  host: postgres
+  port: 5432
+  db: misskey
+  user: misskey
+  pass: misskey
+dbReplications: false
+redis:
+  host: redis
+  port: 6379
+fulltextSearch:
+  provider: sqlLike
+id: 'aidx'
+`
 
 func TestBackupAndRestore(t *testing.T) {
 	ctx := context.Background()
 
-	nw, err := network.New(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	testcontainers.CleanupNetwork(t, nw)
-
-	pg, err := testcontainers.Run(ctx, "groonga/pgroonga:latest-debian-17",
-		network.WithNetwork([]string{"postgres"}, nw),
-		testcontainers.WithEnv(map[string]string{
-			"POSTGRES_DB":       "mk1",
-			"POSTGRES_USER":     "postgres",
-			"POSTGRES_PASSWORD": "testpassword",
-		}),
-		testcontainers.WithFiles(testcontainers.ContainerFile{
-			HostFilePath:      "../test-data.sql",
-			ContainerFilePath: "/docker-entrypoint-initdb.d/test-data.sql",
-			FileMode:          0o644,
-		}),
-		// initdb後の再起動分含め2回
-		testcontainers.WithWaitStrategy(wait.ForLog("database system is ready to accept connections").WithOccurrence(2)),
-	)
-	testcontainers.CleanupContainer(t, pg)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	redis, err := testcontainers.Run(ctx, "redis:7-alpine",
-		network.WithNetwork([]string{"redis"}, nw),
-		testcontainers.WithWaitStrategy(wait.ForLog("Ready to accept connections")),
-	)
-	testcontainers.CleanupContainer(t, redis)
-	if err != nil {
-		t.Fatal(err)
-	}
-	mustExec(ctx, t, redis, "redis-cli", "set", "e2e:key", "value")
+	nw := newNetwork(ctx, t)
+	startPostgres(ctx, t, nw)
+	startRedis(ctx, t, nw)
+	misskey := startMisskey(ctx, t, nw)
 
 	rustfs, err := testcontainers.Run(ctx, "rustfs/rustfs:1.0.3",
 		network.WithNetwork([]string{"s3"}, nw),
@@ -87,15 +85,36 @@ func TestBackupAndRestore(t *testing.T) {
 	client := newS3Client(s3Endpoint)
 	createBucket(ctx, t, client)
 
+	// バックアップ対象データ投入
+	misskeyURL := endpoint(ctx, t, misskey, "3000/tcp")
+	var account struct {
+		Token string `json:"token"`
+	}
+	callAPI(ctx, t, misskeyURL, "admin/accounts/create", map[string]any{
+		"username": "e2e",
+		"password": "e2e-password",
+	}, &account)
+	noteText := fmt.Sprintf("e2e note %d", time.Now().UnixNano())
+	var created struct {
+		CreatedNote struct {
+			ID string `json:"id"`
+		} `json:"createdNote"`
+	}
+	callAPI(ctx, t, misskeyURL, "notes/create", map[string]any{
+		"i":    account.Token,
+		"text": noteText,
+	}, &created)
+	noteID := created.CreatedNote.ID
+
 	app, err := testcontainers.Run(ctx, "",
 		testcontainers.WithDockerfile(testcontainers.FromDockerfile{Context: ".."}),
 		network.WithNetwork([]string{"backup"}, nw),
 		testcontainers.WithEnv(map[string]string{
 			"TZ":                       "Asia/Tokyo",
 			"POSTGRES_HOST":            "postgres",
-			"POSTGRES_USER":            "postgres",
-			"POSTGRES_PASSWORD":        "testpassword",
-			"POSTGRES_DB":              "mk1",
+			"POSTGRES_USER":            dbUser,
+			"POSTGRES_PASSWORD":        dbPassword,
+			"POSTGRES_DB":              dbName,
 			"REDIS_HOST":               "redis",
 			"BACKUP_ENCRYPTION_KEY":    "e2e-encryption-key-0123456789abcdef",
 			"BACKUP_ENDPOINT":          "http://s3:9000",
@@ -127,24 +146,157 @@ func TestBackupAndRestore(t *testing.T) {
 		}
 	}
 
-	pgObject := findObject(ctx, t, client, regexp.MustCompile(`^mk1_[0-9_-]+\.dump\.zst\.enc$`))
+	pgObject := findObject(ctx, t, client, regexp.MustCompile(`^misskey_[0-9_-]+\.dump\.zst\.enc$`))
 	redisObject := findObject(ctx, t, client, regexp.MustCompile(`^redis_[0-9_-]+\.rdb\.zst\.enc$`))
 
 	// アプリコンテナから到達可能なホスト名で署名
 	presignClient := s3.NewPresignClient(newS3Client("http://s3:9000"))
+	dump := readFile(ctx, t, app, restore(ctx, t, app, presignClient, pgObject))
+	rdbPath := restore(ctx, t, app, presignClient, redisObject)
+	mustExec(ctx, t, app, "redis-check-rdb", rdbPath)
+	rdb := readFile(ctx, t, app, rdbPath)
 
-	t.Run("restore PostgreSQL", func(t *testing.T) {
-		dump := restore(ctx, t, app, presignClient, pgObject)
-		toc := mustExec(ctx, t, app, "pg_restore", "--list", dump)
-		if !strings.Contains(toc, "TABLE public users") {
-			t.Errorf("restored dump does not contain users table:\n%s", toc)
-		}
-	})
+	// 復元先は別ネットワーク上の同名ホスト
+	restoredNw := newNetwork(ctx, t)
+	restoredPg := startPostgres(ctx, t, restoredNw)
+	if err := restoredPg.CopyToContainer(ctx, dump, "/tmp/backup.dump", 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mustExec(ctx, t, restoredPg, "pg_restore", "--exit-on-error", "-U", dbUser, "-d", dbName, "/tmp/backup.dump")
 
-	t.Run("restore Redis", func(t *testing.T) {
-		rdb := restore(ctx, t, app, presignClient, redisObject)
-		mustExec(ctx, t, app, "redis-check-rdb", rdb)
-	})
+	got := strings.TrimSpace(mustExec(ctx, t, restoredPg, "psql", "-U", dbUser, "-d", dbName, "-tAc",
+		fmt.Sprintf("SELECT text FROM note WHERE id = '%s'", noteID)))
+	if got != noteText {
+		t.Fatalf("restored note text = %q, want %q", got, noteText)
+	}
+
+	startRedis(ctx, t, restoredNw, testcontainers.WithFiles(testcontainers.ContainerFile{
+		Reader:            bytes.NewReader(rdb),
+		ContainerFilePath: "/data/dump.rdb",
+		FileMode:          0o644,
+	}))
+	restoredMisskey := startMisskey(ctx, t, restoredNw)
+	restoredURL := endpoint(ctx, t, restoredMisskey, "3000/tcp")
+
+	var me struct {
+		Username string `json:"username"`
+	}
+	callAPI(ctx, t, restoredURL, "i", map[string]any{"i": account.Token}, &me)
+	if me.Username != "e2e" {
+		t.Errorf("restored username = %q, want %q", me.Username, "e2e")
+	}
+
+	var note struct {
+		Text string `json:"text"`
+	}
+	callAPI(ctx, t, restoredURL, "notes/show", map[string]any{"noteId": noteID}, &note)
+	if note.Text != noteText {
+		t.Errorf("restored note text via API = %q, want %q", note.Text, noteText)
+	}
+}
+
+func newNetwork(ctx context.Context, t *testing.T) *testcontainers.DockerNetwork {
+	t.Helper()
+	nw, err := network.New(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	testcontainers.CleanupNetwork(t, nw)
+	return nw
+}
+
+func startPostgres(ctx context.Context, t *testing.T, nw *testcontainers.DockerNetwork) *testcontainers.DockerContainer {
+	t.Helper()
+	c, err := testcontainers.Run(ctx, postgresImage,
+		network.WithNetwork([]string{"postgres"}, nw),
+		testcontainers.WithEnv(map[string]string{
+			"POSTGRES_DB":       dbName,
+			"POSTGRES_USER":     dbUser,
+			"POSTGRES_PASSWORD": dbPassword,
+		}),
+		// initdb後の再起動分含め2回
+		testcontainers.WithWaitStrategy(wait.ForLog("database system is ready to accept connections").WithOccurrence(2)),
+	)
+	testcontainers.CleanupContainer(t, c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return c
+}
+
+func startRedis(ctx context.Context, t *testing.T, nw *testcontainers.DockerNetwork, opts ...testcontainers.ContainerCustomizer) *testcontainers.DockerContainer {
+	t.Helper()
+	opts = append([]testcontainers.ContainerCustomizer{
+		network.WithNetwork([]string{"redis"}, nw),
+		testcontainers.WithWaitStrategy(wait.ForLog("Ready to accept connections")),
+	}, opts...)
+	c, err := testcontainers.Run(ctx, redisImage, opts...)
+	testcontainers.CleanupContainer(t, c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return c
+}
+
+func startMisskey(ctx context.Context, t *testing.T, nw *testcontainers.DockerNetwork) *testcontainers.DockerContainer {
+	t.Helper()
+	c, err := testcontainers.Run(ctx, misskeyImage,
+		network.WithNetwork([]string{"misskey"}, nw),
+		testcontainers.WithFiles(testcontainers.ContainerFile{
+			Reader:            strings.NewReader(misskeyConfig),
+			ContainerFilePath: "/misskey/.config/default.yml",
+			FileMode:          0o644,
+		}),
+		testcontainers.WithExposedPorts("3000/tcp"),
+		testcontainers.WithWaitStrategyAndDeadline(10*time.Minute,
+			wait.ForHTTP("/api/meta").WithPort("3000/tcp").
+				WithMethod(http.MethodPost).
+				WithHeaders(map[string]string{"Content-Type": "application/json"}).
+				WithBody(strings.NewReader("{}")),
+		),
+	)
+	testcontainers.CleanupContainer(t, c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return c
+}
+
+func endpoint(ctx context.Context, t *testing.T, c *testcontainers.DockerContainer, port string) string {
+	t.Helper()
+	u, err := c.PortEndpoint(ctx, port, "http")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return u
+}
+
+func callAPI(ctx context.Context, t *testing.T, baseURL, name string, body map[string]any, out any) {
+	t.Helper()
+	b, err := json.Marshal(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+"/api/"+name, bytes.NewReader(b))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("%s returned %s: %s", name, resp.Status, respBody)
+	}
+	if err := json.Unmarshal(respBody, out); err != nil {
+		t.Fatalf("%s: failed to decode response: %v", name, err)
+	}
 }
 
 func newS3Client(endpoint string) *s3.Client {
@@ -201,7 +353,21 @@ func restore(ctx context.Context, t *testing.T, app testcontainers.Container, pr
 		t.Fatal(err)
 	}
 	mustExec(ctx, t, app, "./misskey-backup", "--restore-url", req.URL)
-	return "restore/" + strings.TrimSuffix(object, ".zst.enc")
+	return "/app/restore/" + strings.TrimSuffix(object, ".zst.enc")
+}
+
+func readFile(ctx context.Context, t *testing.T, c testcontainers.Container, path string) []byte {
+	t.Helper()
+	r, err := c.CopyFileFromContainer(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	b, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
 }
 
 func mustExec(ctx context.Context, t *testing.T, c testcontainers.Container, cmd ...string) string {
